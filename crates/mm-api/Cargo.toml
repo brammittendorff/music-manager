@@ -1,0 +1,28 @@
+[package]
+name = "mm-api"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "mm-api"
+path = "src/main.rs"
+
+[dependencies]
+mm-config   = { workspace = true }
+mm-db       = { workspace = true }
+sqlx        = { workspace = true }
+tokio       = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+anyhow      = { workspace = true }
+tracing     = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+bigdecimal  = { workspace = true }
+axum        = { version = "0.7", features = ["macros"] }
+tower-http  = { version = "0.5", features = ["cors", "trace"] }
+dotenvy     = "0.15"
+mm-discogs  = { workspace = true }
+mm-platforms = { workspace = true }
+mm-copyright = { workspace = true }

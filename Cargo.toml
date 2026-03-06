@@ -1,0 +1,81 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/mm-config",
+    "crates/mm-db",
+    "crates/mm-discogs",
+    "crates/mm-platforms",
+    "crates/mm-matcher",
+    "crates/mm-copyright",
+    "crates/mm-ripper",
+    "crates/mm-encoder",
+    "crates/mm-tagger",
+    "crates/mm-watcher",
+    "crates/mm-cli",
+    "crates/mm-api",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["music-manager contributors"]
+license = "MIT"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# HTTP
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Database
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "macros", "bigdecimal"] }
+
+# Config
+config = { version = "0.14", features = ["toml"] }
+
+# CLI
+clap = { version = "4", features = ["derive", "env"] }
+
+# Fuzzy matching
+strsim = "0.11"
+nucleo = "0.5"
+
+# Errors
+anyhow = "1"
+thiserror = "1"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# UUID
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Date/time
+chrono = { version = "0.4", features = ["serde"] }
+
+# Rate limiting
+governor = "0.6"
+
+# Async trait
+async-trait = "0.1"
+
+# Decimal
+bigdecimal = { version = "0.4", features = ["serde"] }
+
+# Internal crates
+mm-config   = { path = "crates/mm-config" }
+mm-db       = { path = "crates/mm-db" }
+mm-discogs  = { path = "crates/mm-discogs" }
+mm-platforms = { path = "crates/mm-platforms" }
+mm-matcher  = { path = "crates/mm-matcher" }
+mm-copyright = { path = "crates/mm-copyright" }
+mm-ripper   = { path = "crates/mm-ripper" }
+mm-encoder  = { path = "crates/mm-encoder" }
+mm-tagger   = { path = "crates/mm-tagger" }
+mm-watcher  = { path = "crates/mm-watcher" }

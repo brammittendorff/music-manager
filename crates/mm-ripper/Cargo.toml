@@ -1,0 +1,33 @@
+[package]
+name = "mm-ripper"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mm-config   = { workspace = true }
+mm-db       = { workspace = true }
+mm-encoder  = { workspace = true }
+mm-tagger   = { workspace = true }
+mm-matcher  = { workspace = true }
+anyhow      = { workspace = true }
+tokio       = { workspace = true }
+tracing     = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+reqwest     = { workspace = true }
+async-trait = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# udev for disc insertion events on Linux
+udev = "0.8"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+# Windows API bindings for drive detection
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_System_IO",
+    "Win32_Storage_FileSystem",
+    "Win32_Devices_DeviceAndDriverInstallation",
+] }

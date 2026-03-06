@@ -1,0 +1,13 @@
+[package]
+name = "mm-matcher"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+strsim   = { workspace = true }
+serde    = { workspace = true }
+anyhow   = { workspace = true }
+tracing  = { workspace = true }
+reqwest  = { workspace = true }
+tokio      = { workspace = true }
+serde_json = { workspace = true }

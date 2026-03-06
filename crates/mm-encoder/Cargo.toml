@@ -1,0 +1,14 @@
+[package]
+name = "mm-encoder"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow   = { workspace = true }
+tracing  = { workspace = true }
+
+# LAME MP3 encoder bindings
+mp3lame-encoder = "0.1"
+
+# FLAC encoder
+# claxon can decode FLAC; for encoding we call the `flac` CLI tool

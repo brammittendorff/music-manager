@@ -1,0 +1,9 @@
+[package]
+name = "mm-config"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+config = { workspace = true }
+serde = { workspace = true }
+anyhow = { workspace = true }

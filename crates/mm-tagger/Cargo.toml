@@ -1,0 +1,9 @@
+[package]
+name = "mm-tagger"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow  = { workspace = true }
+tracing = { workspace = true }
+id3     = "1"

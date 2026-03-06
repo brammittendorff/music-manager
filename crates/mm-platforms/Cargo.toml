@@ -1,0 +1,19 @@
+[package]
+name = "mm-platforms"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mm-config   = { workspace = true }
+mm-matcher  = { workspace = true }
+reqwest     = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+anyhow      = { workspace = true }
+tokio       = { workspace = true }
+tracing     = { workspace = true }
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+async-trait = { workspace = true }
+futures     = "0.3"
+governor    = { workspace = true }

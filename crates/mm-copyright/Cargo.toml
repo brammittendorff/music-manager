@@ -1,0 +1,9 @@
+[package]
+name = "mm-copyright"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mm-config = { workspace = true }
+serde     = { workspace = true }
+chrono    = { workspace = true }

@@ -1,0 +1,57 @@
+[search]
+country       = "Netherlands"
+country_code  = "NL"
+genres        = ["Pop", "Jazz", "Folk", "Electronic", "Schlager", "Classical", "Cabaret"]
+year_from     = 1950
+year_to       = 2005
+page_size     = 100
+max_pages     = 10
+format_filter = "Album"
+labels        = [
+    "CNR", "Polydor", "Philips", "Havoc", "Negram", "Dureco",
+    "Bovema", "EMI Holland", "CBS Holland", "WEA Benelux",
+    "Harlekijn", "Telstar", "White Label",
+]
+
+[platforms]
+check           = ["spotify", "youtube_music", "deezer", "apple_music", "bandcamp"]
+match_threshold = 0.85
+rate_limit_ms   = 1000
+
+[copyright]
+# EU Directive 2011/77/EU: sound recordings expire 70 years after publication
+sound_recording_term_years = 70
+# Flag for manual review if within 5 years of expiry
+review_buffer_years = 5
+
+[ripper]
+poll_interval_secs = 2
+format             = "mp3"      # "mp3" or "flac"
+bitrate_kbps       = 320
+keep_flac          = true       # Keep lossless master alongside MP3
+backend_linux      = "cdparanoia"
+backend_windows    = "ffmpeg"
+temp_dir           = "/tmp/music-manager"
+accuraterip        = true
+
+[storage]
+local_path      = "/music/digitized"
+# Available tokens: {country_code}, {artist}, {year}, {album}, {track}, {title}
+folder_template = "{country_code}/{artist}/{year} - {album}"
+file_template   = "{track:02} - {title}"
+
+[api]
+discogs_token           = ""    # or env: MMGR_API__DISCOGS_TOKEN
+spotify_client_id       = ""    # or env: MMGR_API__SPOTIFY_CLIENT_ID
+spotify_client_secret   = ""    # or env: MMGR_API__SPOTIFY_CLIENT_SECRET
+youtube_api_key         = ""    # or env: MMGR_API__YOUTUBE_API_KEY
+musicbrainz_user_agent  = "music-manager/0.1 ( contact@example.com )"
+
+[database]
+url             = "postgres://mmgr:mmgr@localhost:5432/music_manager"
+max_connections = 10
+
+[notifications]
+enabled         = false
+discord_webhook = ""
+slack_webhook   = ""

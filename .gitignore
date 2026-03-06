@@ -1,0 +1,39 @@
+# Rust
+target/
+*.pdb
+
+# Config overrides (contain secrets)
+config/local.toml
+
+# Environment secrets
+.env
+
+# Frontend build output and deps
+frontend/node_modules/
+frontend/dist/
+
+# Database
+*.db
+*.sqlite
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Docker volumes (not tracked)
+pgdata/
+
+# Logs
+*.log
+
+# Music output (large files)
+/music/
+
+# Temp rip files
+/tmp/music-manager/

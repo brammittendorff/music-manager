@@ -1,0 +1,109 @@
+# After `docker compose up --build`:
+#   Frontend: http://localhost:8888
+#   API:      http://localhost:3001
+#   pgAdmin:  http://localhost:5050
+#   Adminer:  http://localhost:8080
+#
+# ─── music-manager services ───────────────────────────────────────────────────
+#
+#  postgres  — Primary PostgreSQL 16 database.
+#              Data is persisted in the named volume `pgdata`.
+#              Port 5432 is exposed to the host.
+#
+#  adminer   — Lightweight web-based database browser (alternative to pgadmin).
+#              Available at http://localhost:8080
+#              Login: server=postgres, user/password from .env, db=music_manager
+#
+#  pgadmin   — Full-featured pgAdmin 4 web UI.
+#              Available at http://localhost:5050
+#              Default login: admin@local.dev / admin
+#
+#  api       — mm-api Rust backend.
+#              Available at http://localhost:3001
+#
+#  frontend  — Vite/React frontend served by nginx.
+#              Available at http://localhost:8888
+#              Proxies /api/* → api:3001
+#
+# Usage:
+#   cp .env.example .env          # fill in your secrets
+#   docker compose up --build     # build and start all services
+#   docker compose logs -f        # follow logs
+# ──────────────────────────────────────────────────────────────────────────────
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: music-manager-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: mmgr
+      POSTGRES_PASSWORD: mmgr
+      POSTGRES_DB: music_manager
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mmgr -d music_manager"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  adminer:
+    image: adminer:latest
+    container_name: music-manager-adminer
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ADMINER_DEFAULT_SERVER: postgres
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: music-manager-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@local.dev
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: music-manager-api
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://mmgr:mmgr@postgres:5432/music_manager
+      MMGR_DATABASE__URL: postgres://mmgr:mmgr@postgres:5432/music_manager
+    ports:
+      - "3001:3001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  frontend:
+    image: node:22-slim
+    container_name: music-manager-frontend
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: sh -c "npm install && npm run dev"
+    ports:
+      - "8888:5173"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:

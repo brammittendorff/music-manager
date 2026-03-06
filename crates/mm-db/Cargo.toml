@@ -1,0 +1,16 @@
+[package]
+name = "mm-db"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+mm-config   = { workspace = true }
+sqlx        = { workspace = true }
+uuid        = { workspace = true }
+chrono      = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+anyhow      = { workspace = true }
+tokio       = { workspace = true }
+tracing     = { workspace = true }
+bigdecimal = { workspace = true }
