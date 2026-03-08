@@ -86,7 +86,7 @@ export default function RipJobs() {
                   </div>
                   {job.output_dir && (
                     <div className="rip-meta" style={{ color: 'var(--text-muted)', fontSize: 10 }}>
-                      → {job.output_dir}
+                      {job.output_dir}
                     </div>
                   )}
                 </div>

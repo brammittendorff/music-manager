@@ -8,7 +8,6 @@ mm-config   = { workspace = true }
 mm-db       = { workspace = true }
 mm-encoder  = { workspace = true }
 mm-tagger   = { workspace = true }
-mm-matcher  = { workspace = true }
 anyhow      = { workspace = true }
 tokio       = { workspace = true }
 tracing     = { workspace = true }
@@ -17,7 +16,6 @@ serde_json  = { workspace = true }
 uuid        = { workspace = true }
 chrono      = { workspace = true }
 reqwest     = { workspace = true }
-async-trait = { workspace = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # udev for disc insertion events on Linux

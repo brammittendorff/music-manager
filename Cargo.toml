@@ -43,7 +43,6 @@ clap = { version = "4", features = ["derive", "env"] }
 
 # Fuzzy matching
 strsim = "0.11"
-nucleo = "0.5"
 
 # Errors
 anyhow = "1"

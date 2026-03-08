@@ -89,6 +89,8 @@ pub struct ApiConfig {
     pub spotify_client_secret: String,
     pub youtube_api_key: String,
     pub musicbrainz_user_agent: String,
+    #[serde(default)]
+    pub lastfm_api_key: String,
 }
 
 #[derive(Debug, Deserialize, Clone)]

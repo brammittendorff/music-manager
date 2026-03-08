@@ -25,6 +25,7 @@ impl DiscogsClient {
         let http = Client::builder()
             .user_agent("music-manager/0.1 +https://github.com/music-manager")
             .timeout(Duration::from_secs(30))
+            .local_address("0.0.0.0".parse().ok())
             .build()?;
 
         let quota = Quota::per_minute(
@@ -127,6 +128,8 @@ impl DiscogsClient {
     }
 
     /// Fetch track titles for a release. Returns empty vec on error (graceful degradation).
+    /// Filters out non-track entries (headings like "DVD & CD", index entries, etc.)
+    /// by checking the Discogs `type_` field — only `"track"` entries are real music.
     pub async fn get_tracklist(&self, release_id: u32) -> Vec<String> {
         let url = format!("{BASE_URL}/releases/{release_id}");
         match self.get::<serde_json::Value>(&url).await {
@@ -136,6 +139,10 @@ impl DiscogsClient {
                     .map(|tracks| {
                         tracks
                             .iter()
+                            .filter(|t| {
+                                // Discogs type_: "track" = real music, "heading"/"index" = not
+                                t["type_"].as_str().unwrap_or("track") == "track"
+                            })
                             .filter_map(|t| t["title"].as_str())
                             .filter(|t| !t.is_empty())
                             .map(|t| t.to_owned())
@@ -145,6 +152,13 @@ impl DiscogsClient {
             }
             Err(_) => vec![],
         }
+    }
+
+    /// Fetch marketplace stats for a release: lowest price + number for sale.
+    /// Discogs API: GET /marketplace/stats/{release_id}
+    pub async fn get_marketplace_stats(&self, release_id: u32) -> Result<models::MarketplaceStats> {
+        let url = format!("{BASE_URL}/marketplace/stats/{release_id}?curr_abbr=EUR");
+        self.get(&url).await
     }
 
     /// Generate the Discogs marketplace buy URL for a release.
@@ -162,14 +176,17 @@ impl DiscogsClient {
 }
 
 fn urlenccode(s: &str) -> String {
-    // Simple percent-encoding for query params
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => {
-                c.to_string()
+    let mut result = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                result.push(b as char);
             }
-            ' ' => "+".to_string(),
-            c => format!("%{:02X}", c as u32),
-        })
-        .collect()
+            b' ' => result.push('+'),
+            _ => {
+                result.push_str(&format!("%{:02X}", b));
+            }
+        }
+    }
+    result
 }

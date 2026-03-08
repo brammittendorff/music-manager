@@ -120,6 +120,7 @@ pub async fn run(args: &SearchArgs, cfg: &AppConfig, pool: &Db) -> Result<()> {
                     release_id,
                     platform: result.platform.clone(),
                     found: result.found,
+                    error: result.error,
                     match_score: result.match_result.as_ref().map(|m| m.score),
                     platform_url: result
                         .match_result

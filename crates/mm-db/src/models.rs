@@ -83,6 +83,7 @@ pub struct PlatformCheck {
     pub release_id: Uuid,
     pub platform: String,
     pub found: bool,
+    pub error: bool,
     pub match_score: Option<f64>,
     pub platform_url: Option<String>,
     pub checked_at: DateTime<Utc>,

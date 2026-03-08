@@ -42,11 +42,25 @@ pub struct Community {
     pub want: u32,
 }
 
+// ─── Marketplace stats ───────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MarketplaceStats {
+    pub lowest_price: Option<MarketplacePrice>,
+    pub num_for_sale: u32,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MarketplacePrice {
+    pub value: f64,
+    pub currency: String,
+}
+
 impl DiscogsRelease {
     /// Split "Artist – Title" Discogs format into artist and title parts.
     pub fn split_artist_title(&self) -> (String, String) {
         // Try en dash first (Discogs standard), then ASCII hyphen fallback
-        let sep = self.title.find(" \u{2013} ").map(|i| (i, 4))
+        let sep = self.title.find(" \u{2013} ").map(|i| (i, " \u{2013} ".len()))
             .or_else(|| self.title.find(" - ").map(|i| (i, 3)));
         if let Some((pos, len)) = sep {
             let artist = self.title[..pos].trim().to_owned();

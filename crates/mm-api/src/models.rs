@@ -28,12 +28,23 @@ pub struct ReleaseRow {
     pub formats: Vec<String>,
     pub discogs_url: String,
     pub copyright_status: String,
+    pub lowest_price_eur: Option<bigdecimal::BigDecimal>,
+    pub num_for_sale: Option<i32>,
+    pub popularity_score: Option<f32>,
+    pub discogs_want: Option<i32>,
+    pub discogs_have: Option<i32>,
+    pub discogs_rating: Option<f32>,
+    pub discogs_rating_count: Option<i32>,
+    pub lastfm_listeners: Option<i32>,
+    pub lastfm_playcount: Option<i32>,
+    pub has_wikipedia: Option<bool>,
 }
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct PlatformCheckRow {
     pub platform: String,
     pub found: bool,
+    pub error: bool,
     pub match_score: Option<f64>,
     pub platform_url: Option<String>,
 }
@@ -64,6 +75,9 @@ pub struct WatchlistRow {
     pub label: Option<String>,
     pub copyright_status: String,
     pub discogs_url: String,
+    pub lowest_price_eur: Option<bigdecimal::BigDecimal>,
+    pub num_for_sale: Option<i32>,
+    pub skip_reason: Option<String>,
 }
 
 #[allow(dead_code)]
@@ -96,6 +110,7 @@ pub struct ReleasesQuery {
     pub offset: Option<i64>,
     pub platform_status: Option<String>, // "unchecked" | "missing" | "found"
     pub platforms: Option<String>,       // comma-separated list: "spotify,deezer" (missing on all listed)
+    pub sort_by: Option<String>,         // "popularity" | "" (default: artist,title)
 }
 
 #[derive(Debug, Deserialize)]

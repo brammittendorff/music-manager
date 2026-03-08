@@ -26,3 +26,5 @@ dotenvy     = "0.15"
 mm-discogs  = { workspace = true }
 mm-platforms = { workspace = true }
 mm-copyright = { workspace = true }
+reqwest     = { workspace = true }
+governor    = { workspace = true }

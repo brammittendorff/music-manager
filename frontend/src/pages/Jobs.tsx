@@ -26,11 +26,11 @@ function PlatformCheckerPanel() {
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 12 }}>
         <div style={{ background: 'var(--bg-raised)', borderRadius: 6, padding: '8px 10px' }}>
           <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>UNCHECKED</div>
-          <div className="mono" style={{ fontSize: 16 }}>{data?.unchecked_count ?? '—'}</div>
+          <div className="mono" style={{ fontSize: 16 }}>{data?.unchecked_count ?? ''}</div>
         </div>
         <div style={{ background: 'var(--bg-raised)', borderRadius: 6, padding: '8px 10px' }}>
           <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 2 }}>CHECKED</div>
-          <div className="mono" style={{ fontSize: 16 }}>{data?.total_checked ?? '—'}</div>
+          <div className="mono" style={{ fontSize: 16 }}>{data?.total_checked ?? ''}</div>
         </div>
       </div>
 

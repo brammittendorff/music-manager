@@ -1403,11 +1403,13 @@ dependencies = [
  "bigdecimal",
  "chrono",
  "dotenvy",
+ "governor",
  "mm-config",
  "mm-copyright",
  "mm-db",
  "mm-discogs",
  "mm-platforms",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",
@@ -1483,16 +1485,12 @@ name = "mm-discogs"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
  "governor",
  "mm-config",
- "mm-db",
  "reqwest",
  "serde",
  "serde_json",
- "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1523,7 +1521,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "chrono",
  "futures",
  "governor",
  "mm-config",
@@ -1533,7 +1530,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "uuid",
 ]
 
 [[package]]
@@ -1541,12 +1537,10 @@ name = "mm-ripper"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "async-trait",
  "chrono",
  "mm-config",
  "mm-db",
  "mm-encoder",
- "mm-matcher",
  "mm-tagger",
  "reqwest",
  "serde",
@@ -1575,7 +1569,6 @@ dependencies = [
  "mm-config",
  "mm-db",
  "mm-discogs",
- "reqwest",
  "serde",
  "sqlx",
  "tokio",

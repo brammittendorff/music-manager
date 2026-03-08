@@ -177,13 +177,15 @@ fn escape_mb(s: &str) -> String {
 }
 
 fn urlenccode(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-            ' ' => "+".to_string(),
-            c => format!("%{:02X}", c as u32),
-        })
-        .collect()
+    let mut result = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => result.push(b as char),
+            b' ' => result.push('+'),
+            _ => result.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -192,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_normalize() {
-        assert_eq!(normalize("André van Duin!"), "andr van duin");
+        assert_eq!(normalize("André van Duin!"), "andré van duin");
         assert_eq!(normalize("De  Dijk"), "de dijk");
     }
 

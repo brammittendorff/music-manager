@@ -56,6 +56,7 @@ pub async fn run(args: &CheckArgs, cfg: &AppConfig, pool: &Db) -> Result<()> {
                 release_id: release.id,
                 platform: r.platform.clone(),
                 found: r.found,
+                error: r.error,
                 match_score: r.match_result.as_ref().map(|m| m.score),
                 platform_url: r
                     .match_result
@@ -87,6 +88,7 @@ pub async fn run(args: &CheckArgs, cfg: &AppConfig, pool: &Db) -> Result<()> {
                     release_id: release.id,
                     platform: r.platform.clone(),
                     found: r.found,
+                    error: r.error,
                     match_score: r.match_result.as_ref().map(|m| m.score),
                     platform_url: r
                         .match_result

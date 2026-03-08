@@ -51,6 +51,7 @@ export interface Stats {
 export interface PlatformCheck {
   platform: string
   found: boolean
+  error: boolean
   match_score: number | null
   platform_url: string | null
 }
@@ -72,6 +73,16 @@ export interface Release {
   in_watchlist?: boolean
   watchlist_id?: string
   watchlist_status?: string
+  lowest_price_eur: number | null
+  num_for_sale: number | null
+  popularity_score: number | null
+  discogs_want: number | null
+  discogs_have: number | null
+  discogs_rating: number | null
+  discogs_rating_count: number | null
+  lastfm_listeners: number | null
+  lastfm_playcount: number | null
+  has_wikipedia: boolean | null
 }
 
 export interface ReleasesResponse {
@@ -94,6 +105,9 @@ export interface WatchlistItem {
   label: string | null
   copyright_status: string
   discogs_url: string
+  lowest_price_eur: number | null
+  num_for_sale: number | null
+  skip_reason: string | null
 }
 
 export interface TrackCheck {
@@ -172,6 +186,7 @@ export interface ReleasesFilter {
   offset?: number
   platform_status?: string   // "unchecked" | "missing" | "found" | ""
   platforms?: string         // comma-separated: "spotify,deezer"
+  sort_by?: string           // "artist" | "title" | "year" | "label" | "copyright" | "popularity" | "format" | "price" + optional "_asc"/"_desc"
 }
 
 export const api = {
@@ -181,6 +196,8 @@ export const api = {
   watchlist: () => get<WatchlistItem[]>('/api/watchlist'),
   updateWatchlistStatus: (id: string, status: string) =>
     patch(`/api/watchlist/${id}/status`, { status }),
+  deleteWatchlistItem: (id: string) =>
+    fetch(BASE + `/api/watchlist/${id}`, { method: 'DELETE' }).then(r => r.json()),
   addToWatchlist: (discogs_id: number, notes?: string) =>
     post('/api/watchlist', { discogs_id, notes }),
   ripJobs: () => get<RipJob[]>('/api/rip-jobs'),
@@ -213,10 +230,14 @@ export const api = {
   },
   clearReleases: async () => {
     const res = await fetch(BASE + '/api/releases/clear', { method: 'DELETE' })
-    if (!res.ok) throw new Error('Clear failed')
+    if (!res.ok) {
+      const msg = await res.text().catch(() => res.statusText)
+      throw new Error(msg)
+    }
     return res.json()
   },
   platformCheckerStatus: () => get<PlatformCheckerStatus>('/api/platform-checker/status'),
   platformCheckerStart: () => post<{ ok: boolean }>('/api/platform-checker/start', {}),
   platformCheckerStop: () => post<{ ok: boolean }>('/api/platform-checker/stop', {}),
+  enrichReleases: () => post<{ started: boolean; releases_to_enrich: number; message: string }>('/api/releases/enrich', {}),
 }

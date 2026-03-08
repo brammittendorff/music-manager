@@ -20,11 +20,13 @@ impl BandcampChecker {
         Ok(Self {
             http: Client::builder()
                 .timeout(Duration::from_secs(30))
+                .local_address("0.0.0.0".parse().ok())
                 .user_agent("Mozilla/5.0 (compatible; music-manager/0.1)")
                 .build()?,
-            // Bandcamp scraping: be polite, 10 req/min
+            // Bandcamp: no public API, scraping only. Be very polite: 4 req/min.
+            // Aggressive scraping leads to IP bans via Cloudflare.
             limiter: Arc::new(RateLimiter::direct(
-                Quota::per_minute(NonZeroU32::new(10).unwrap()),
+                Quota::per_minute(NonZeroU32::new(4).unwrap()),
             )),
         })
     }
@@ -50,6 +52,26 @@ impl BandcampChecker {
 
         results
     }
+
+    /// Parse album results from Bandcamp search HTML.
+    /// Returns vec of (artist, album_title, url).
+    fn parse_album_results(html: &str) -> Vec<(String, String, Option<String>)> {
+        let mut results = Vec::new();
+
+        // Album results use <li class="searchresult album"> blocks.
+        for block in html.split(r#"class="searchresult album""#).skip(1) {
+            let title = extract_between(block, r#"class="heading">"#, "</");
+            let artist = extract_between(block, r#"class="subhead">"#, "</");
+            let url = extract_between(block, r#"class="itemurl">"#, "<");
+
+            if let (Some(t), Some(a)) = (title, artist) {
+                let artist = a.trim_start_matches("by ").trim().to_owned();
+                results.push((artist, t.trim().to_owned(), url.map(|u| u.trim().to_owned())));
+            }
+        }
+
+        results
+    }
 }
 
 fn extract_between<'a>(s: &'a str, start: &str, end: &str) -> Option<String> {
@@ -63,6 +85,29 @@ fn extract_between<'a>(s: &'a str, start: &str, end: &str) -> Option<String> {
 impl PlatformChecker for BandcampChecker {
     fn name(&self) -> &str {
         "bandcamp"
+    }
+
+    /// Album-level check: search Bandcamp for the album by artist + album title.
+    /// Uses item_type=a to search for albums instead of tracks.
+    async fn check_album(&self, artist: &str, album: &str, threshold: f64) -> Result<Option<PlatformResult>> {
+        self.limiter.until_ready().await;
+        let query = format!("{} {}", artist, album);
+        let url = format!(
+            "https://bandcamp.com/search?q={}&item_type=a",
+            urlenccode(&query)
+        );
+        tracing::info!(url = %url, "Bandcamp: album search");
+
+        let html = self.http.get(&url).send().await?.text().await?;
+        let candidates = Self::parse_album_results(&html);
+
+        match best_match(artist, album, &candidates, threshold) {
+            Some(m) => {
+                tracing::info!("Bandcamp: album found: {} - {}", m.candidate_artist, m.candidate_title);
+                Ok(Some(PlatformResult::found("bandcamp", m)))
+            }
+            None => Ok(Some(PlatformResult::not_found("bandcamp"))),
+        }
     }
 
     async fn check(&self, artist: &str, title: &str, threshold: f64) -> Result<PlatformResult> {
@@ -85,11 +130,13 @@ impl PlatformChecker for BandcampChecker {
 }
 
 fn urlenccode(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '~' => c.to_string(),
-            ' ' => "+".to_string(),
-            c => format!("%{:02X}", c as u32),
-        })
-        .collect()
+    let mut result = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => result.push(b as char),
+            b' ' => result.push('+'),
+            _ => result.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    result
 }

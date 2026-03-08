@@ -5,13 +5,9 @@ edition.workspace = true
 
 [dependencies]
 mm-config   = { workspace = true }
-mm-db       = { workspace = true }
 reqwest     = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 anyhow      = { workspace = true }
-tokio       = { workspace = true }
 tracing     = { workspace = true }
-uuid        = { workspace = true }
-chrono      = { workspace = true }
 governor    = { workspace = true }

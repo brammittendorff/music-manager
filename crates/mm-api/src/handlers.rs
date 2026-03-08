@@ -4,10 +4,13 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use governor::{Quota, RateLimiter};
 use mm_copyright::estimate as estimate_copyright;
 use mm_db::{models::Release, queries};
 use mm_discogs::DiscogsClient;
 use mm_platforms::PlatformCoordinator;
+use reqwest::Client;
+use std::num::NonZeroU32;
 use std::sync::{Arc, atomic::Ordering};
 use std::time::Duration;
 use tracing::{error, info, warn};
@@ -97,11 +100,37 @@ pub async fn releases(
         .filter(|s| !s.is_empty())
         .collect();
 
-    let rows = sqlx::query_as::<_, ReleaseRow>(
+    let sort_by = q.sort_by.as_deref().unwrap_or("");
+
+    let order_clause = match sort_by {
+        "popularity" | "popularity_desc" => "ORDER BY r.popularity_score DESC NULLS LAST, r.artists[1], r.title",
+        "popularity_asc" => "ORDER BY r.popularity_score ASC NULLS LAST, r.artists[1], r.title",
+        "artist" | "artist_asc" => "ORDER BY r.artists[1] ASC, r.title ASC",
+        "artist_desc" => "ORDER BY r.artists[1] DESC, r.title ASC",
+        "title" | "title_asc" => "ORDER BY r.title ASC, r.artists[1] ASC",
+        "title_desc" => "ORDER BY r.title DESC, r.artists[1] ASC",
+        "year" | "year_desc" => "ORDER BY r.year DESC NULLS LAST, r.artists[1], r.title",
+        "year_asc" => "ORDER BY r.year ASC NULLS LAST, r.artists[1], r.title",
+        "label" | "label_asc" => "ORDER BY r.label ASC NULLS LAST, r.artists[1], r.title",
+        "label_desc" => "ORDER BY r.label DESC NULLS LAST, r.artists[1], r.title",
+        "copyright" | "copyright_asc" => "ORDER BY r.copyright_status ASC, r.artists[1], r.title",
+        "copyright_desc" => "ORDER BY r.copyright_status DESC, r.artists[1], r.title",
+        "format" | "format_asc" => "ORDER BY r.formats[1] ASC NULLS LAST, r.artists[1], r.title",
+        "format_desc" => "ORDER BY r.formats[1] DESC NULLS LAST, r.artists[1], r.title",
+        "price" | "price_asc" => "ORDER BY r.lowest_price_eur ASC NULLS LAST, r.artists[1], r.title",
+        "price_desc" => "ORDER BY r.lowest_price_eur DESC NULLS LAST, r.artists[1], r.title",
+        _ => "ORDER BY r.artists[1], r.title",
+    };
+
+    let query_str = format!(
         r#"
         SELECT r.id, r.discogs_id, r.title, r.artists, r.label,
                r.country, r.country_code, r.year, r.genres, r.formats,
-               r.discogs_url, r.copyright_status
+               r.discogs_url, r.copyright_status,
+               r.lowest_price_eur, r.num_for_sale,
+               r.popularity_score, r.discogs_want, r.discogs_have,
+               r.discogs_rating, r.discogs_rating_count,
+               r.lastfm_listeners, r.lastfm_playcount, r.has_wikipedia
         FROM releases r
         WHERE r.country_code = $1
           AND (r.year IS NULL OR (r.year >= $2 AND r.year <= $3))
@@ -130,10 +159,12 @@ pub async fn releases(
                   )
               ) = cardinality($8)
           )
-        ORDER BY r.artists[1], r.title
+        {order_clause}
         LIMIT $9 OFFSET $10
         "#,
-    )
+    );
+
+    let rows = sqlx::query_as::<_, ReleaseRow>(&query_str)
     .bind(country_code)
     .bind(year_from)
     .bind(year_to)
@@ -151,8 +182,8 @@ pub async fn releases(
     // Fetch platform checks for all these releases in one query
     let ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
 
-    let checks = sqlx::query_as::<_, (Uuid, String, bool, Option<f64>, Option<String>)>(
-        "SELECT release_id, platform, found, match_score, platform_url
+    let checks = sqlx::query_as::<_, (Uuid, String, bool, bool, Option<f64>, Option<String>)>(
+        "SELECT release_id, platform, found, error, match_score, platform_url
          FROM platform_checks WHERE release_id = ANY($1)",
     )
     .bind(&ids)
@@ -160,16 +191,40 @@ pub async fn releases(
     .await
     .map_err(db_err)?;
 
-    // Group checks by release_id
+    // Fetch watchlist status for all these releases in one query
+    #[derive(sqlx::FromRow)]
+    struct WlInfo {
+        release_id: Uuid,
+        id: Uuid,
+        status: String,
+    }
+
+    let wl_rows = sqlx::query_as::<_, WlInfo>(
+        "SELECT release_id, id, status FROM watchlist WHERE release_id = ANY($1)",
+    )
+    .bind(&ids)
+    .fetch_all(pool)
+    .await
+    .map_err(db_err)?;
+
     use std::collections::HashMap;
+
+    // Group checks by release_id
     let mut checks_map: HashMap<Uuid, Vec<serde_json::Value>> = HashMap::new();
-    for (rid, platform, found, score, url) in checks {
+    for (rid, platform, found, error, score, url) in checks {
         checks_map.entry(rid).or_default().push(serde_json::json!({
             "platform": platform,
             "found": found,
+            "error": error,
             "match_score": score,
             "platform_url": url,
         }));
+    }
+
+    // Group watchlist by release_id
+    let mut wl_map: HashMap<Uuid, WlInfo> = HashMap::new();
+    for wl in wl_rows {
+        wl_map.insert(wl.release_id, wl);
     }
 
     let result: Vec<serde_json::Value> = rows
@@ -177,6 +232,7 @@ pub async fn releases(
         .map(|r| {
             let platforms = checks_map.remove(&r.id).unwrap_or_default();
             let buy_url = DiscogsClient::buy_url(r.discogs_id as u32);
+            let wl = wl_map.get(&r.id);
             serde_json::json!({
                 "id": r.id,
                 "discogs_id": r.discogs_id,
@@ -191,6 +247,14 @@ pub async fn releases(
                 "buy_url": buy_url,
                 "copyright_status": r.copyright_status,
                 "platforms": platforms,
+                "in_watchlist": wl.is_some(),
+                "watchlist_id": wl.map(|w| w.id),
+                "watchlist_status": wl.map(|w| &w.status),
+                "lowest_price_eur": r.lowest_price_eur.as_ref().map(|p| p.to_string()),
+                "num_for_sale": r.num_for_sale,
+                "popularity_score": r.popularity_score,
+                "discogs_want": r.discogs_want,
+                "discogs_have": r.discogs_have,
             })
         })
         .collect();
@@ -255,7 +319,11 @@ pub async fn release_detail(
 
     let release = sqlx::query_as::<_, ReleaseRow>(
         "SELECT id, discogs_id, title, artists, label, country, country_code,
-                year, genres, formats, discogs_url, copyright_status
+                year, genres, formats, discogs_url, copyright_status,
+                lowest_price_eur, num_for_sale,
+                popularity_score, discogs_want, discogs_have,
+                discogs_rating, discogs_rating_count,
+                lastfm_listeners, lastfm_playcount, has_wikipedia
          FROM releases WHERE id = $1",
     )
     .bind(id)
@@ -265,7 +333,7 @@ pub async fn release_detail(
     .ok_or((StatusCode::NOT_FOUND, "Release not found".to_string()))?;
 
     let platforms = sqlx::query_as::<_, PlatformCheckRow>(
-        "SELECT platform, found, match_score, platform_url
+        "SELECT platform, found, error, match_score, platform_url
          FROM platform_checks WHERE release_id = $1 ORDER BY platform",
     )
     .bind(id)
@@ -274,7 +342,10 @@ pub async fn release_detail(
     .map_err(db_err)?;
 
     #[derive(sqlx::FromRow)]
-    struct WlRow { id: Uuid, status: String }
+    struct WlRow {
+        id: Uuid,
+        status: String,
+    }
 
     let wl = sqlx::query_as::<_, WlRow>(
         "SELECT id, status FROM watchlist WHERE release_id = $1",
@@ -302,7 +373,17 @@ pub async fn release_detail(
         "platforms": platforms,
         "in_watchlist": wl.is_some(),
         "watchlist_id": wl.as_ref().map(|w| w.id),
-        "watchlist_status": wl.map(|w| w.status),
+        "watchlist_status": wl.as_ref().map(|w| &w.status),
+        "lowest_price_eur": release.lowest_price_eur.as_ref().map(|p| p.to_string()),
+        "num_for_sale": release.num_for_sale,
+        "popularity_score": release.popularity_score,
+        "discogs_want": release.discogs_want,
+        "discogs_have": release.discogs_have,
+        "discogs_rating": release.discogs_rating,
+        "discogs_rating_count": release.discogs_rating_count,
+        "lastfm_listeners": release.lastfm_listeners,
+        "lastfm_playcount": release.lastfm_playcount,
+        "has_wikipedia": release.has_wikipedia,
     })))
 }
 
@@ -313,7 +394,8 @@ pub async fn watchlist(State(s): State<Arc<AppState>>) -> AppResult<Vec<Watchlis
         r#"
         SELECT w.id, w.release_id, w.status, w.buy_url, w.notes, w.added_at,
                r.title, r.artists, r.year, r.label,
-               r.copyright_status, r.discogs_url
+               r.copyright_status, r.discogs_url,
+               w.lowest_price_eur, w.num_for_sale, w.skip_reason
         FROM watchlist w
         JOIN releases r ON r.id = w.release_id
         ORDER BY w.status, r.artists[1], r.title
@@ -356,7 +438,29 @@ pub async fn add_to_watchlist(
             .fetch_one(pool)
             .await
             {
-                Ok(id) => (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response(),
+                Ok(id) => {
+                    // Fetch marketplace price immediately in background
+                    let cfg = s.cfg.clone();
+                    let pool = pool.clone();
+                    let discogs_id = body.discogs_id;
+                    tokio::spawn(async move {
+                        if let Ok(discogs) = DiscogsClient::new(&cfg) {
+                            if let Ok(stats) = discogs.get_marketplace_stats(discogs_id as u32).await {
+                                let price = stats.lowest_price.as_ref().map(|p| p.value);
+                                sqlx::query(
+                                    "UPDATE watchlist SET lowest_price_eur = $1, num_for_sale = $2,
+                                     price_checked_at = now() WHERE id = $3"
+                                )
+                                .bind(price)
+                                .bind(stats.num_for_sale as i32)
+                                .bind(id)
+                                .execute(&pool)
+                                .await.ok();
+                            }
+                        }
+                    });
+                    (StatusCode::CREATED, Json(serde_json::json!({ "id": id }))).into_response()
+                }
                 Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
             }
         }
@@ -382,6 +486,25 @@ pub async fn update_watchlist_status(
 
     match result {
         Ok(_) => (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    }
+}
+
+// ─── DELETE /api/watchlist/:id ────────────────────────────────────────────────
+
+pub async fn delete_watchlist_item(
+    State(s): State<Arc<AppState>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    match sqlx::query("DELETE FROM watchlist WHERE id = $1")
+        .bind(id)
+        .execute(&s.pool)
+        .await
+    {
+        Ok(r) if r.rows_affected() > 0 => {
+            (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
+        }
+        Ok(_) => (StatusCode::NOT_FOUND, "Watchlist item not found".to_string()).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
@@ -805,7 +928,8 @@ pub async fn platform_checker_start(State(s): State<Arc<AppState>>) -> impl Into
     }
     s.platform_checker_cancel.store(false, Ordering::Relaxed);
     s.platform_checker_active.store(true, Ordering::Relaxed);
-    tokio::spawn(run_platform_checker(s.clone()));
+    let handle = tokio::spawn(run_platform_checker(s.clone()));
+    *s.platform_checker_handle.lock().await = Some(handle);
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
@@ -813,6 +937,11 @@ pub async fn platform_checker_start(State(s): State<Arc<AppState>>) -> impl Into
 
 pub async fn platform_checker_stop(State(s): State<Arc<AppState>>) -> impl IntoResponse {
     s.platform_checker_cancel.store(true, Ordering::Relaxed);
+    // Abort immediately — don't wait for the next cancel-flag check
+    if let Some(handle) = s.platform_checker_handle.lock().await.take() {
+        handle.abort();
+    }
+    s.platform_checker_active.store(false, Ordering::Relaxed);
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
 
@@ -821,16 +950,49 @@ pub async fn platform_checker_stop(State(s): State<Arc<AppState>>) -> impl IntoR
 pub async fn run_platform_checker(state: Arc<AppState>) {
     info!("Platform checker started");
 
+    // Create coordinator ONCE - reused across all releases (shares token cache)
+    let coordinator = match PlatformCoordinator::new(&state.cfg).await {
+        Ok(c) => c,
+        Err(e) => {
+            warn!("Platform checker: failed to create coordinator: {e}");
+            state.platform_checker_active.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+    let discogs = match DiscogsClient::new(&state.cfg) {
+        Ok(d) => d,
+        Err(e) => {
+            warn!("Platform checker: failed to create Discogs client: {e}");
+            state.platform_checker_active.store(false, Ordering::Relaxed);
+            return;
+        }
+    };
+
+    // Enrichment resources (reused across all releases)
+    let enrich_http = Client::builder()
+        .user_agent("music-manager/0.1 +https://github.com/music-manager")
+        .timeout(Duration::from_secs(30))
+        .local_address("0.0.0.0".parse().ok())
+        .build()
+        .ok();
+    let lastfm_limiter = RateLimiter::direct(
+        Quota::per_second(NonZeroU32::new(4).unwrap()),
+    );
+    let wiki_limiter = RateLimiter::direct(
+        Quota::per_second(NonZeroU32::new(1).unwrap()),
+    );
+
     loop {
         if state.platform_checker_cancel.load(Ordering::Relaxed) {
             break;
         }
 
-        // Find next unchecked release
+        // Find next unchecked release, prioritized by popularity score (most popular first),
+        // then newest. This ensures interesting releases get checked before obscure ones.
         let release = sqlx::query_as::<_, mm_db::models::Release>(
             "SELECT * FROM releases r
-             WHERE NOT EXISTS (SELECT 1 FROM platform_checks pc WHERE pc.release_id = r.id)
-             ORDER BY r.created_at ASC
+             WHERE NOT EXISTS (SELECT 1 FROM track_checks tc WHERE tc.release_id = r.id)
+             ORDER BY r.popularity_score DESC NULLS LAST, r.created_at DESC
              LIMIT 1"
         )
         .fetch_optional(&state.pool)
@@ -838,9 +1000,22 @@ pub async fn run_platform_checker(state: Arc<AppState>) {
 
         match release {
             Ok(Some(r)) => {
-                if let Err(e) = check_release_platforms(&state, &r).await {
-                    warn!("Platform check failed for {}: {e}", r.id);
-                }
+                // Run platform checks, price fetch, and enrichment concurrently.
+                // They hit mostly different APIs so they don't block each other.
+                let platforms_fut = async {
+                    if let Err(e) = check_release_platforms(&state, &r, &coordinator, &discogs).await {
+                        warn!("Platform check failed for {}: {e}", r.id);
+                    }
+                };
+                let price_fut = fetch_release_price(&state, &r, &discogs);
+                let enrich_fut = async {
+                    if let Some(ref http) = enrich_http {
+                        enrich_single_release(&state, &r, &discogs, http, &lastfm_limiter, &wiki_limiter).await;
+                    }
+                };
+                tokio::join!(platforms_fut, price_fut, enrich_fut);
+                // Pause between releases - each platform has its own rate limiter
+                tokio::time::sleep(Duration::from_secs(1)).await;
             }
             Ok(None) => {
                 info!("Platform checker: all releases checked, sleeping 60s");
@@ -862,9 +1037,146 @@ pub async fn run_platform_checker(state: Arc<AppState>) {
     state.platform_checker_active.store(false, Ordering::Relaxed);
 }
 
-async fn check_release_platforms(state: &Arc<AppState>, release: &mm_db::models::Release) -> anyhow::Result<()> {
-    let coordinator = PlatformCoordinator::new(&state.cfg).await?;
-    let discogs = DiscogsClient::new(&state.cfg)?;
+async fn fetch_release_price(
+    state: &Arc<AppState>,
+    release: &mm_db::models::Release,
+    discogs: &DiscogsClient,
+) {
+    // Skip if we already have a price
+    let has_price: bool = sqlx::query_scalar(
+        "SELECT price_checked_at IS NOT NULL FROM releases WHERE id = $1"
+    )
+    .bind(release.id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(true); // default true to skip on error
+
+    if has_price {
+        return;
+    }
+
+    match discogs.get_marketplace_stats(release.discogs_id as u32).await {
+        Ok(stats) => {
+            let price = stats.lowest_price.as_ref().map(|p| p.value);
+            sqlx::query(
+                "UPDATE releases SET lowest_price_eur = $1, num_for_sale = $2, price_checked_at = now() WHERE id = $3"
+            )
+            .bind(price)
+            .bind(stats.num_for_sale as i32)
+            .bind(release.id)
+            .execute(&state.pool)
+            .await
+            .ok();
+        }
+        Err(e) => {
+            // Mark as checked even on error so we don't retry every loop
+            tracing::debug!("Price fetch failed for {}: {e}", release.id);
+            sqlx::query("UPDATE releases SET price_checked_at = now() WHERE id = $1")
+                .bind(release.id)
+                .execute(&state.pool)
+                .await
+                .ok();
+        }
+    }
+}
+
+async fn enrich_single_release(
+    state: &Arc<AppState>,
+    release: &mm_db::models::Release,
+    discogs: &DiscogsClient,
+    http: &Client,
+    lastfm_limiter: &governor::DefaultDirectRateLimiter,
+    wiki_limiter: &governor::DefaultDirectRateLimiter,
+) {
+    // Skip if already enriched
+    let enriched: bool = sqlx::query_scalar(
+        "SELECT enriched_at IS NOT NULL FROM releases WHERE id = $1"
+    )
+    .bind(release.id)
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(true);
+
+    if enriched {
+        return;
+    }
+
+    let artist = release.artists.first().cloned().unwrap_or_default();
+
+    // 1. Discogs community data
+    let (want, have, rating_avg, rating_count) =
+        match discogs.get_release(release.discogs_id as u32).await {
+            Ok(json) => {
+                let community = &json["community"];
+                (
+                    community["want"].as_i64().unwrap_or(0) as i32,
+                    community["have"].as_i64().unwrap_or(0) as i32,
+                    community["rating"]["average"].as_f64().unwrap_or(0.0),
+                    community["rating"]["count"].as_i64().unwrap_or(0) as i32,
+                )
+            }
+            Err(e) => {
+                tracing::debug!("Enrichment: Discogs fetch failed for {}: {e}", release.id);
+                (0, 0, 0.0, 0)
+            }
+        };
+
+    // 2. Last.fm (if configured)
+    let has_lastfm = !state.cfg.api.lastfm_api_key.is_empty();
+    let (lastfm_listeners, lastfm_playcount) = if has_lastfm {
+        fetch_lastfm_album_info(http, &state.cfg.api.lastfm_api_key, &artist, &release.title, lastfm_limiter)
+            .await
+            .unwrap_or((0, 0))
+    } else {
+        (0, 0)
+    };
+
+    // 3. Wikipedia
+    let has_wikipedia = check_wikipedia(http, &artist, wiki_limiter).await;
+
+    // 4. Compute score
+    let score = compute_popularity_score(want, have, rating_avg, rating_count, lastfm_playcount, has_wikipedia);
+
+    // 5. Store
+    sqlx::query(
+        "UPDATE releases SET
+            discogs_want = $1, discogs_have = $2,
+            discogs_rating = $3, discogs_rating_count = $4,
+            lastfm_listeners = $5, lastfm_playcount = $6,
+            has_wikipedia = $7, popularity_score = $8,
+            enriched_at = now()
+         WHERE id = $9",
+    )
+    .bind(want)
+    .bind(have)
+    .bind(rating_avg as f32)
+    .bind(rating_count)
+    .bind(lastfm_listeners)
+    .bind(lastfm_playcount)
+    .bind(has_wikipedia)
+    .bind(score as f32)
+    .bind(release.id)
+    .execute(&state.pool)
+    .await
+    .ok();
+}
+
+async fn check_release_platforms(
+    state: &Arc<AppState>,
+    release: &mm_db::models::Release,
+    coordinator: &PlatformCoordinator,
+    discogs: &DiscogsClient,
+) -> anyhow::Result<()> {
+    // Verify the release still exists (it may have been deleted via Clear while queued)
+    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM releases WHERE id = $1)")
+        .bind(release.id)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap_or(false);
+    if !exists {
+        tracing::debug!("Release {} was deleted, skipping platform check", release.id);
+        return Ok(());
+    }
 
     let artist = release.artists.first().cloned().unwrap_or_default();
     let title = &release.title;
@@ -879,6 +1191,52 @@ async fn check_release_platforms(state: &Arc<AppState>, release: &mm_db::models:
 
     // Per-platform accumulator: (found, url, score)
     let mut platform_found: std::collections::HashMap<String, (bool, Option<String>, Option<f64>)> = std::collections::HashMap::new();
+    // Platforms that returned transient errors (will be retried)
+    let mut platform_errored: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+
+    // ── Album-level check first (e.g. Spotify uses 1 API call instead of N) ──
+    let album_results = coordinator.check_albums(&artist, title, state.cfg.platforms.match_threshold).await;
+    for result in &album_results {
+        if result.error {
+            platform_errored.insert(result.platform.clone(), true);
+        } else {
+            let entry = platform_found.entry(result.platform.clone()).or_insert((false, None, None));
+            if result.found {
+                entry.0 = true;
+                entry.1 = result.match_result.as_ref().and_then(|m| m.platform_url.clone());
+                entry.2 = result.match_result.as_ref().map(|m| m.score);
+            }
+        }
+    }
+
+    // Save album-level aggregate results
+    for (platform, (found, url, score)) in &platform_found {
+        let check = mm_db::models::PlatformCheck {
+            id: Uuid::new_v4(),
+            release_id: release.id,
+            platform: platform.clone(),
+            found: *found,
+            error: false,
+            match_score: *score,
+            platform_url: url.clone(),
+            checked_at: chrono::Utc::now(),
+        };
+        queries::upsert_platform_check(&state.pool, &check).await.ok();
+    }
+    for (platform, _) in &platform_errored {
+        if platform_found.contains_key(platform) { continue; }
+        let check = mm_db::models::PlatformCheck {
+            id: Uuid::new_v4(),
+            release_id: release.id,
+            platform: platform.clone(),
+            found: false,
+            error: true,
+            match_score: None,
+            platform_url: None,
+            checked_at: chrono::Utc::now(),
+        };
+        queries::upsert_platform_check(&state.pool, &check).await.ok();
+    }
 
     for (track_number, search_title) in search_titles.iter().enumerate() {
         if state.platform_checker_cancel.load(Ordering::Relaxed) {
@@ -889,10 +1247,30 @@ async fn check_release_platforms(state: &Arc<AppState>, release: &mm_db::models:
 
         let mut all_found = true;
         for result in &results {
-            // Save per-track result
+            // Skip platforms already resolved at album level
+            if platform_found.get(&result.platform).map(|e| e.0).unwrap_or(false) {
+                continue;
+            }
+
+            // Skip saving errored results — they'll be retried
+            if result.error {
+                // Mark this platform as errored in the aggregate if not already found
+                let entry = platform_errored.entry(result.platform.clone()).or_insert(true);
+                if !platform_found.contains_key(&result.platform) {
+                    all_found = false;
+                }
+                // Still save an errored aggregate so the UI can show it
+                if !platform_found.contains_key(&result.platform) {
+                    *entry = true;
+                }
+                continue;
+            }
+
+            // Save per-track result (SELECT ... WHERE EXISTS prevents FK violation if release was deleted)
             sqlx::query(
                 "INSERT INTO track_checks (release_id, track_title, track_number, platform, found, match_score, platform_url)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)
+                 SELECT $1, $2, $3, $4, $5, $6, $7
+                 WHERE EXISTS (SELECT 1 FROM releases WHERE id = $1)
                  ON CONFLICT (release_id, track_title, platform) DO UPDATE SET
                      found = EXCLUDED.found, match_score = EXCLUDED.match_score,
                      platform_url = EXCLUDED.platform_url, checked_at = now()"
@@ -907,7 +1285,8 @@ async fn check_release_platforms(state: &Arc<AppState>, release: &mm_db::models:
             .execute(&state.pool)
             .await.ok();
 
-            // Update aggregate
+            // Update aggregate — clear any previous error state
+            platform_errored.remove(&result.platform);
             let entry = platform_found.entry(result.platform.clone()).or_insert((false, None, None));
             if result.found && !entry.0 {
                 entry.0 = true;
@@ -926,8 +1305,24 @@ async fn check_release_platforms(state: &Arc<AppState>, release: &mm_db::models:
                 release_id: release.id,
                 platform: platform.clone(),
                 found: *found,
+                error: false,
                 match_score: *score,
                 platform_url: url.clone(),
+                checked_at: chrono::Utc::now(),
+            };
+            queries::upsert_platform_check(&state.pool, &check).await.ok();
+        }
+        // Save errored platforms so UI can show them distinctly
+        for (platform, _) in &platform_errored {
+            if platform_found.contains_key(platform) { continue; }
+            let check = mm_db::models::PlatformCheck {
+                id: Uuid::new_v4(),
+                release_id: release.id,
+                platform: platform.clone(),
+                found: false,
+                error: true,
+                match_score: None,
+                platform_url: None,
                 checked_at: chrono::Utc::now(),
             };
             queries::upsert_platform_check(&state.pool, &check).await.ok();
@@ -953,6 +1348,101 @@ pub async fn run_platform_checker_watchdog(state: Arc<AppState>) {
             run_platform_checker(state.clone()).await;
         }
         tokio::time::sleep(Duration::from_secs(30)).await;
+    }
+}
+
+// ─── Watchlist automation: price checks + auto-skip ──────────────────────────
+
+pub async fn run_watchlist_automation(state: Arc<AppState>) {
+    info!("Watchlist automation started");
+
+    let discogs = match DiscogsClient::new(&state.cfg) {
+        Ok(d) => d,
+        Err(e) => {
+            warn!("Watchlist automation: failed to create Discogs client: {e}");
+            return;
+        }
+    };
+
+    loop {
+        // 1) Update marketplace prices for "to_buy" items (oldest price first)
+        let to_buy_items = sqlx::query_as::<_, (Uuid, i32)>(
+            "SELECT w.id, r.discogs_id FROM watchlist w
+             JOIN releases r ON r.id = w.release_id
+             WHERE w.status = 'to_buy'
+               AND (w.price_checked_at IS NULL OR w.price_checked_at < now() - interval '24 hours')
+             ORDER BY w.price_checked_at NULLS FIRST
+             LIMIT 10"
+        )
+        .fetch_all(&state.pool)
+        .await;
+
+        if let Ok(items) = to_buy_items {
+            for (wl_id, discogs_id) in &items {
+                match discogs.get_marketplace_stats(*discogs_id as u32).await {
+                    Ok(stats) => {
+                        let price = stats.lowest_price.as_ref().map(|p| p.value);
+                        sqlx::query(
+                            "UPDATE watchlist SET lowest_price_eur = $1, num_for_sale = $2,
+                             price_checked_at = now() WHERE id = $3"
+                        )
+                        .bind(price)
+                        .bind(stats.num_for_sale as i32)
+                        .bind(wl_id)
+                        .execute(&state.pool)
+                        .await.ok();
+                    }
+                    Err(e) => {
+                        warn!("Marketplace stats failed for discogs_id {discogs_id}: {e}");
+                        // Still update checked_at so we don't hammer it
+                        sqlx::query("UPDATE watchlist SET price_checked_at = now() WHERE id = $1")
+                            .bind(wl_id).execute(&state.pool).await.ok();
+                    }
+                }
+            }
+        }
+
+        // 2) Auto-skip watchlist items that are now on streaming platforms
+        let watchlist_release_ids = sqlx::query_as::<_, (Uuid, Uuid)>(
+            "SELECT w.id, w.release_id FROM watchlist w
+             WHERE w.status NOT IN ('done', 'skipped')
+               AND EXISTS (
+                   SELECT 1 FROM platform_checks pc
+                   WHERE pc.release_id = w.release_id
+                     AND pc.found = true AND pc.error = false
+               )"
+        )
+        .fetch_all(&state.pool)
+        .await;
+
+        if let Ok(items) = watchlist_release_ids {
+            for (wl_id, release_id) in &items {
+                // Get which platforms found it
+                let platforms: Vec<String> = sqlx::query_scalar(
+                    "SELECT platform FROM platform_checks
+                     WHERE release_id = $1 AND found = true AND error = false"
+                )
+                .bind(release_id)
+                .fetch_all(&state.pool)
+                .await
+                .unwrap_or_default();
+
+                let reason = format!("found_on_streaming: {}", platforms.join(", "));
+                info!("Auto-skipping watchlist item {wl_id}: {reason}");
+
+                sqlx::query(
+                    "UPDATE watchlist SET status = 'skipped', skip_reason = $1, updated_at = now()
+                     WHERE id = $2"
+                )
+                .bind(&reason)
+                .bind(wl_id)
+                .execute(&state.pool)
+                .await.ok();
+            }
+        }
+
+        // Run every 5 minutes
+        tokio::time::sleep(Duration::from_secs(300)).await;
     }
 }
 
@@ -1026,8 +1516,6 @@ pub async fn clear_releases(State(s): State<Arc<AppState>>) -> impl IntoResponse
     }
     (StatusCode::OK, Json(serde_json::json!({ "ok": true }))).into_response()
 }
-
-// ─── GET /api/rip-jobs ────────────────────────────────────────────────────────
 
 // ─── GET /api/releases/:id/tracks ────────────────────────────────────────────
 
@@ -1104,4 +1592,313 @@ pub async fn rip_jobs(State(s): State<Arc<AppState>>) -> AppResult<Vec<serde_jso
         .collect();
 
     Ok(Json(result))
+}
+
+// ─── Popularity scoring helpers ──────────────────────────────────────────────
+
+fn compute_popularity_score(
+    want: i32,
+    have: i32,
+    rating_avg: f64,
+    rating_count: i32,
+    lastfm_playcount: i32,
+    has_wikipedia: bool,
+) -> f64 {
+    // Discogs component (70%)
+    let want_norm = (((want as f64) + 1.0).ln() / (1000.0_f64).ln()).min(1.0);
+    let have_norm = (((have as f64) + 1.0).ln() / (5000.0_f64).ln()).min(1.0);
+    let rating_norm = if rating_count >= 3 {
+        rating_avg / 5.0
+    } else {
+        0.0
+    };
+    let scarcity = if have > 0 {
+        ((want as f64) / (have as f64)).min(1.0)
+    } else {
+        0.0
+    };
+
+    let discogs_score = 0.30 * want_norm + 0.20 * have_norm + 0.25 * rating_norm + 0.25 * scarcity;
+
+    // Enrichment component (30%)
+    let lastfm_norm = (((lastfm_playcount as f64) + 1.0).ln() / (100_000.0_f64).ln()).min(1.0);
+    let wiki_norm = if has_wikipedia { 1.0 } else { 0.0 };
+
+    let enrichment_score = 0.50 * lastfm_norm + 0.50 * wiki_norm;
+
+    0.70 * discogs_score + 0.30 * enrichment_score
+}
+
+async fn fetch_lastfm_album_info(
+    http: &Client,
+    api_key: &str,
+    artist: &str,
+    album: &str,
+    limiter: &governor::DefaultDirectRateLimiter,
+) -> Option<(i32, i32)> {
+    limiter.until_ready().await;
+
+    let url = format!(
+        "http://ws.audioscrobbler.com/2.0/?method=album.getinfo&api_key={}&artist={}&album={}&format=json",
+        api_key,
+        urlenccode(artist),
+        urlenccode(album),
+    );
+
+    let resp = match http.get(&url).timeout(Duration::from_secs(15)).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("Last.fm request failed: {e}");
+            return None;
+        }
+    };
+
+    let json: serde_json::Value = match resp.json().await {
+        Ok(j) => j,
+        Err(_) => return None,
+    };
+
+    let album_obj = json.get("album")?;
+    let listeners = album_obj
+        .get("listeners")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<i32>().ok())
+        .unwrap_or(0);
+    let playcount = album_obj
+        .get("playcount")
+        .and_then(|v| v.as_str())
+        .and_then(|s| s.parse::<i32>().ok())
+        .unwrap_or(0);
+
+    Some((listeners, playcount))
+}
+
+async fn check_wikipedia(
+    http: &Client,
+    artist: &str,
+    limiter: &governor::DefaultDirectRateLimiter,
+) -> bool {
+    // Check English Wikipedia
+    if check_wikipedia_lang(http, artist, "en", limiter).await {
+        return true;
+    }
+    // Check Dutch Wikipedia
+    check_wikipedia_lang(http, artist, "nl", limiter).await
+}
+
+async fn check_wikipedia_lang(
+    http: &Client,
+    artist: &str,
+    lang: &str,
+    limiter: &governor::DefaultDirectRateLimiter,
+) -> bool {
+    limiter.until_ready().await;
+
+    let url = format!(
+        "https://{lang}.wikipedia.org/w/api.php?action=query&titles={}&format=json",
+        urlenccode(artist),
+    );
+
+    let resp = match http.get(&url).timeout(Duration::from_secs(10)).send().await {
+        Ok(r) => r,
+        Err(_) => return false,
+    };
+
+    let text = match resp.text().await {
+        Ok(t) => t,
+        Err(_) => return false,
+    };
+
+    // If the response contains "missing", the page does not exist
+    !text.contains("\"missing\"")
+}
+
+/// Simple percent-encoding for query params (mirrors mm-discogs)
+fn urlenccode(s: &str) -> String {
+    let mut result = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => result.push(b as char),
+            b' ' => result.push('+'),
+            _ => result.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    result
+}
+
+// ─── POST /api/releases/enrich ───────────────────────────────────────────────
+
+pub async fn enrich_releases(State(s): State<Arc<AppState>>) -> impl IntoResponse {
+    // Find releases that haven't been enriched yet
+    #[derive(sqlx::FromRow)]
+    struct EnrichRow {
+        id: Uuid,
+        discogs_id: i32,
+        title: String,
+        artists: Vec<String>,
+    }
+
+    let releases = match sqlx::query_as::<_, EnrichRow>(
+        "SELECT id, discogs_id, title, artists FROM releases
+         WHERE discogs_want IS NULL OR enriched_at IS NULL
+         ORDER BY created_at ASC
+         LIMIT 100",
+    )
+    .fetch_all(&s.pool)
+    .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        }
+    };
+
+    if releases.is_empty() {
+        return (
+            StatusCode::OK,
+            Json(serde_json::json!({ "enriched": 0, "message": "No releases need enrichment" })),
+        )
+            .into_response();
+    }
+
+    let total = releases.len();
+
+    // Spawn background task
+    let pool = s.pool.clone();
+    let cfg = s.cfg.clone();
+    tokio::spawn(async move {
+        let http = match Client::builder()
+            .user_agent("music-manager/0.1 +https://github.com/music-manager")
+            .timeout(Duration::from_secs(30))
+            .build()
+        {
+            Ok(c) => c,
+            Err(e) => {
+                error!("Failed to create HTTP client for enrichment: {e}");
+                return;
+            }
+        };
+
+        let discogs = match DiscogsClient::new(&cfg) {
+            Ok(d) => d,
+            Err(e) => {
+                error!("Failed to create Discogs client for enrichment: {e}");
+                return;
+            }
+        };
+
+        // Rate limiters
+        let lastfm_limiter = RateLimiter::direct(
+            Quota::per_second(NonZeroU32::new(4).unwrap()),
+        );
+        let wiki_limiter = RateLimiter::direct(
+            Quota::per_second(NonZeroU32::new(1).unwrap()),
+        );
+
+        let has_lastfm = !cfg.api.lastfm_api_key.is_empty();
+
+        let mut enriched_count = 0usize;
+
+        for release in &releases {
+            let artist = release.artists.first().cloned().unwrap_or_default();
+
+            // 1. Fetch Discogs community data
+            let (want, have, rating_avg, rating_count) =
+                match discogs.get_release(release.discogs_id as u32).await {
+                    Ok(json) => {
+                        let community = &json["community"];
+                        let want = community["want"].as_i64().unwrap_or(0) as i32;
+                        let have = community["have"].as_i64().unwrap_or(0) as i32;
+                        let rating_avg = community["rating"]["average"]
+                            .as_f64()
+                            .unwrap_or(0.0);
+                        let rating_count = community["rating"]["count"]
+                            .as_i64()
+                            .unwrap_or(0) as i32;
+                        (want, have, rating_avg, rating_count)
+                    }
+                    Err(e) => {
+                        warn!(
+                            "Failed to fetch Discogs release {} for enrichment: {e}",
+                            release.discogs_id
+                        );
+                        (0, 0, 0.0, 0)
+                    }
+                };
+
+            // 2. Fetch Last.fm data (if API key configured)
+            let (lastfm_listeners, lastfm_playcount) = if has_lastfm {
+                fetch_lastfm_album_info(
+                    &http,
+                    &cfg.api.lastfm_api_key,
+                    &artist,
+                    &release.title,
+                    &lastfm_limiter,
+                )
+                .await
+                .unwrap_or((0, 0))
+            } else {
+                (0, 0)
+            };
+
+            // 3. Check Wikipedia
+            let has_wikipedia = check_wikipedia(&http, &artist, &wiki_limiter).await;
+
+            // 4. Compute popularity score
+            let score = compute_popularity_score(
+                want,
+                have,
+                rating_avg,
+                rating_count,
+                lastfm_playcount,
+                has_wikipedia,
+            );
+
+            // 5. Store results
+            if let Err(e) = sqlx::query(
+                "UPDATE releases SET
+                    discogs_want = $1,
+                    discogs_have = $2,
+                    discogs_rating = $3,
+                    discogs_rating_count = $4,
+                    lastfm_listeners = $5,
+                    lastfm_playcount = $6,
+                    has_wikipedia = $7,
+                    popularity_score = $8,
+                    enriched_at = now()
+                 WHERE id = $9",
+            )
+            .bind(want)
+            .bind(have)
+            .bind(rating_avg as f32)
+            .bind(rating_count)
+            .bind(lastfm_listeners)
+            .bind(lastfm_playcount)
+            .bind(has_wikipedia)
+            .bind(score as f32)
+            .bind(release.id)
+            .execute(&pool)
+            .await
+            {
+                warn!("Failed to store enrichment for release {}: {e}", release.id);
+            } else {
+                enriched_count += 1;
+            }
+
+            // Pause between releases (2-3 seconds)
+            tokio::time::sleep(Duration::from_millis(2500)).await;
+        }
+
+        info!("Enrichment complete: {enriched_count}/{total} releases enriched");
+    });
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({
+            "started": true,
+            "releases_to_enrich": total,
+            "message": "Enrichment started in background"
+        })),
+    )
+        .into_response()
 }

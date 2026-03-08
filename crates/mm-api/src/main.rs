@@ -26,6 +26,8 @@ pub struct AppState {
     pub platform_checker_active: Arc<AtomicBool>,
     /// Set true to stop the platform checker.
     pub platform_checker_cancel: Arc<AtomicBool>,
+    /// Handle to the running platform checker task so it can be aborted immediately.
+    pub platform_checker_handle: tokio::sync::Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 #[tokio::main]
@@ -58,11 +60,13 @@ async fn main() -> Result<()> {
         discovery_cancel: Arc::new(AtomicBool::new(false)),
         platform_checker_active: Arc::new(AtomicBool::new(false)),
         platform_checker_cancel: Arc::new(AtomicBool::new(false)),
+        platform_checker_handle: tokio::sync::Mutex::new(None),
     });
 
     // Auto-start the platform checker watchdog if Discogs token is configured.
     if !state.cfg.api.discogs_token.is_empty() {
         tokio::spawn(handlers::run_platform_checker_watchdog(state.clone()));
+        tokio::spawn(handlers::run_watchlist_automation(state.clone()));
     }
 
     let cors = CorsLayer::new()
@@ -75,11 +79,13 @@ async fn main() -> Result<()> {
         .route("/api/releases",                          get(handlers::releases))
         .route("/api/releases/export",                   get(handlers::export_releases))
         .route("/api/releases/import",                   post(handlers::import_releases))
+        .route("/api/releases/enrich",                   post(handlers::enrich_releases))
         .route("/api/releases/clear",                    delete(handlers::clear_releases))
         .route("/api/releases/:id",                      get(handlers::release_detail))
         .route("/api/releases/:id/tracks",               get(handlers::release_tracks))
         .route("/api/watchlist",                         get(handlers::watchlist).post(handlers::add_to_watchlist))
         .route("/api/watchlist/:id/status",              patch(handlers::update_watchlist_status))
+        .route("/api/watchlist/:id",                    delete(handlers::delete_watchlist_item))
         .route("/api/rip-jobs",                          get(handlers::rip_jobs))
         .route("/api/discovery",                         delete(handlers::discovery_clear))
         .route("/api/discovery/jobs",                    get(handlers::discovery_list).post(handlers::discovery_create))

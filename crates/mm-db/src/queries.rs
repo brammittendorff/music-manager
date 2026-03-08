@@ -98,10 +98,12 @@ pub async fn list_releases_not_on_platforms(
 pub async fn upsert_platform_check(pool: &PgPool, check: &PlatformCheck) -> Result<()> {
     sqlx::query(
         r#"
-        INSERT INTO platform_checks (id, release_id, platform, found, match_score, platform_url)
-        VALUES ($1, $2, $3, $4, $5, $6)
+        INSERT INTO platform_checks (id, release_id, platform, found, error, match_score, platform_url)
+        SELECT $1, $2, $3, $4, $5, $6, $7
+        WHERE EXISTS (SELECT 1 FROM releases WHERE id = $2)
         ON CONFLICT (release_id, platform) DO UPDATE SET
             found        = EXCLUDED.found,
+            error        = EXCLUDED.error,
             match_score  = EXCLUDED.match_score,
             platform_url = EXCLUDED.platform_url,
             checked_at   = now()
@@ -111,6 +113,7 @@ pub async fn upsert_platform_check(pool: &PgPool, check: &PlatformCheck) -> Resu
     .bind(check.release_id)
     .bind(&check.platform)
     .bind(check.found)
+    .bind(check.error)
     .bind(check.match_score)
     .bind(&check.platform_url)
     .execute(pool)
