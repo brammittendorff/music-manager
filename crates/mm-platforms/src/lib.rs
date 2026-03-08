@@ -86,14 +86,9 @@ impl PlatformCoordinator {
             checkers.push(Box::new(c));
         }
 
-        // YouTube - requires an API key (10,000 quota units/day free)
-        if cfg.api.youtube_api_key.is_empty() {
-            tracing::warn!(
-                "YouTube checker skipped: set MMGR_API__YOUTUBE_API_KEY to enable it \
-                 (free key at https://console.cloud.google.com)"
-            );
-        } else {
-            let c = youtube::YoutubeChecker::new(cfg)?;
+        // YouTube - uses rusty_ytdl (no API key needed)
+        {
+            let c = youtube::YoutubeChecker::new()?;
             checkers.push(Box::new(c));
         }
 

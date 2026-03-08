@@ -44,7 +44,7 @@ file_template   = "{track:02} - {title}"
 discogs_token           = ""    # or env: MMGR_API__DISCOGS_TOKEN
 spotify_client_id       = ""    # or env: MMGR_API__SPOTIFY_CLIENT_ID
 spotify_client_secret   = ""    # or env: MMGR_API__SPOTIFY_CLIENT_SECRET
-youtube_api_key         = ""    # or env: MMGR_API__YOUTUBE_API_KEY
+youtube_api_key         = ""    # no longer needed (rusty_ytdl scrapes directly)
 musicbrainz_user_agent  = "music-manager/0.1 ( contact@example.com )"
 lastfm_api_key          = ""    # optional, get from last.fm/api
 

@@ -1,0 +1,19 @@
+# Normalize all text files to LF in the repo, check out as LF everywhere.
+# This ensures no CRLF/LF diffs between Windows and Linux.
+* text=auto eol=lf
+
+# Explicitly mark known binary formats
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.flac binary
+*.mp3 binary
+*.wav binary
+*.ogg binary
+*.zip binary
+*.tar.gz binary
+*.exe binary
+*.dll binary
+*.so binary

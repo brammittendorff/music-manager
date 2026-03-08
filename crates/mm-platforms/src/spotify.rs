@@ -224,7 +224,7 @@ impl PlatformChecker for SpotifyChecker {
         let query = format!("artist:{} album:{}", artist, album);
         let url = format!(
             "https://api.spotify.com/v1/search?q={}&type=album&limit=5&market=NL",
-            urlenccode(&query)
+            urlenccode(truncate_query(&query))
         );
         tracing::info!(url = %url, "Spotify: album search");
 
@@ -255,7 +255,7 @@ impl PlatformChecker for SpotifyChecker {
         let query = format!("artist:{} track:{}", artist, title);
         let url = format!(
             "https://api.spotify.com/v1/search?q={}&type=track&limit=5&market=NL",
-            urlenccode(&query)
+            urlenccode(truncate_query(&query))
         );
         tracing::info!(url = %url, "Spotify: track search");
 
@@ -276,6 +276,23 @@ impl PlatformChecker for SpotifyChecker {
             Some(m) => Ok(PlatformResult::found("spotify", m)),
             None => Ok(PlatformResult::not_found("spotify")),
         }
+    }
+}
+
+/// Truncate a query string to Spotify's 250-character limit on a word boundary.
+fn truncate_query(q: &str) -> &str {
+    if q.len() <= 250 {
+        return q;
+    }
+    let mut end = 250;
+    while end > 0 && !q.is_char_boundary(end) {
+        end -= 1;
+    }
+    // Try to break on a word boundary
+    if let Some(pos) = q[..end].rfind(' ') {
+        &q[..pos]
+    } else {
+        &q[..end]
     }
 }
 

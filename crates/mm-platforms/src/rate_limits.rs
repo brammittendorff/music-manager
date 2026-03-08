@@ -28,19 +28,10 @@ pub const DISCOGS_DELAY: Duration = Duration::from_millis(1_091);
 /// Source: https://developer.spotify.com/documentation/web-api/concepts/rate-limits
 pub const SPOTIFY_DELAY: Duration = Duration::from_secs(1);
 
-// ─── YouTube Data API v3 ──────────────────────────────────────────────────────
-/// Default daily quota: 10,000 units.
-/// search.list costs 100 units per call → max 100 searches per day.
-/// videos.list/channels.list cost 1 unit each (prefer these when possible).
-/// Quota resets at midnight Pacific Time.
-/// Source: https://developers.google.com/youtube/v3/determine_quota_cost
-pub const YOUTUBE_QUOTA_UNITS_PER_DAY: u32 = 10_000;
-pub const YOUTUBE_SEARCH_COST_UNITS: u32 = 100;
-pub const YOUTUBE_MAX_SEARCHES_PER_DAY: u32 = YOUTUBE_QUOTA_UNITS_PER_DAY / YOUTUBE_SEARCH_COST_UNITS;
-
-/// Conservative delay between YouTube search.list calls (15 seconds).
-/// With 100 searches/day, spacing them out prevents burning the quota too fast.
-pub const YOUTUBE_DELAY: Duration = Duration::from_secs(15);
+// ─── YouTube (rusty_ytdl) ────────────────────────────────────────────────────
+/// rusty_ytdl scrapes YouTube directly — no API key, no daily quota.
+/// Rate limit to 1 req/sec to avoid IP-level 429 blocks.
+pub const YOUTUBE_DELAY: Duration = Duration::from_secs(1);
 
 // ─── Deezer ───────────────────────────────────────────────────────────────────
 /// Deezer: ~50 requests per 5 seconds (community-sourced, not in official docs).
