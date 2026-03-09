@@ -36,7 +36,7 @@ impl PlatformChecker for YoutubeChecker {
         album: &str,
         threshold: f64,
     ) -> Result<Option<PlatformResult>> {
-        let query = format!("{} {}", artist, album);
+        let query = sanitize_query(&format!("{} {}", artist, album));
         tracing::info!(query = %query, "YouTube Music: album search");
 
         self.limiter.until_ready().await;
@@ -87,7 +87,7 @@ impl PlatformChecker for YoutubeChecker {
         title: &str,
         threshold: f64,
     ) -> Result<PlatformResult> {
-        let query = format!("{} {}", artist, title);
+        let query = sanitize_query(&format!("{} {}", artist, title));
         tracing::info!(query = %query, "YouTube Music: track search");
 
         self.limiter.until_ready().await;
@@ -132,4 +132,10 @@ fn strip_topic_suffix(name: &str) -> String {
     name.strip_suffix(" - Topic")
         .unwrap_or(name)
         .to_owned()
+}
+
+/// Sanitize the query before passing it to rusty_ytdl.
+/// Double quotes in the query cause a JSON parse panic inside the library.
+fn sanitize_query(query: &str) -> String {
+    query.replace('"', "")
 }
