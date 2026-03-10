@@ -23,10 +23,10 @@ pub const DISCOGS_DELAY: Duration = Duration::from_millis(1_091);
 /// Spotify Web API: rolling 30-second window, exact limit undisclosed.
 /// Community reports ~250 req/30s for client credentials, but this varies.
 /// Repeated 429s can escalate to 24-hour bans.
-/// We use 1 req/sec (30 req/30s) to stay well under the limit.
+/// We use 50 req/min (~1.2s between requests) to stay well under the limit.
 /// Always honor Retry-After headers; implement exponential backoff.
 /// Source: https://developer.spotify.com/documentation/web-api/concepts/rate-limits
-pub const SPOTIFY_DELAY: Duration = Duration::from_secs(1);
+pub const SPOTIFY_DELAY: Duration = Duration::from_millis(1_200);
 
 // ─── YouTube (rusty_ytdl) ────────────────────────────────────────────────────
 /// rusty_ytdl scrapes YouTube directly — no API key, no daily quota.
@@ -58,7 +58,7 @@ pub const ITUNES_DELAY: Duration = Duration::from_secs(6);
 
 // ─── Bandcamp ─────────────────────────────────────────────────────────────────
 /// Bandcamp has no public API; we scrape HTML search pages.
-/// No published limits. Aggressive scraping triggers Cloudflare blocks.
-/// "Keeping Bandcamp Human" policy prohibits scraping (Jan 2026).
-/// We use 4 req/min (1 req/15sec) to be as polite as possible.
-pub const BANDCAMP_DELAY: Duration = Duration::from_secs(15);
+/// No published limits. Cloudflare rate limits are site-configured
+/// (typical thresholds ~20 req/10s). We use 10 req/min (~6s between
+/// requests) to stay polite while keeping batch checks practical.
+pub const BANDCAMP_DELAY: Duration = Duration::from_secs(6);

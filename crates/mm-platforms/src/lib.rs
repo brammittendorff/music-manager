@@ -9,6 +9,26 @@ use anyhow::Result;
 use mm_config::AppConfig;
 use mm_matcher::MatchResult;
 
+// ─── Album tracks result ─────────────────────────────────────────────────────
+
+/// Result of an album-level check that also fetches the tracklist in a single
+/// extra API call, replacing N per-track searches with 1 tracklist fetch.
+#[derive(Debug, Clone)]
+pub struct AlbumTracksResult {
+    pub platform: String,
+    pub album_found: bool,
+    pub album_url: Option<String>,
+    pub track_matches: Vec<TrackMatch>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TrackMatch {
+    pub track_title: String,
+    pub found: bool,
+    pub score: Option<f64>,
+    pub platform_url: Option<String>,
+}
+
 // ─── Platform check result ────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -62,6 +82,27 @@ pub trait PlatformChecker: Send + Sync {
     /// to per-track checking. Default: None (not supported).
     async fn check_album(&self, _artist: &str, _album: &str, _threshold: f64) -> Result<Option<PlatformResult>> {
         Ok(None)
+    }
+
+    /// Album search + tracklist fetch in 2 API calls total.
+    /// Returns per-track match info when the platform supports fetching an album's
+    /// tracklist by ID. Default: None (not supported, fall back to per-track search).
+    async fn check_album_tracks(
+        &self,
+        _artist: &str,
+        _album: &str,
+        _track_titles: &[String],
+        _threshold: f64,
+    ) -> Result<Option<AlbumTracksResult>> {
+        Ok(None)
+    }
+
+    /// If true, skip per-track checking when the album-level check returned not-found.
+    /// Useful for slow/scraped platforms (e.g. Bandcamp) where per-track checks are
+    /// expensive and unlikely to find results if the album wasn't found.
+    /// Default: false (always do per-track checks).
+    fn skip_tracks_if_album_not_found(&self) -> bool {
+        false
     }
 }
 
@@ -185,5 +226,10 @@ impl PlatformCoordinator {
         }).collect();
 
         futures::future::join_all(tasks).await
+    }
+
+    /// Access the individual checkers for per-platform pipeline processing.
+    pub fn checkers(&self) -> &[Box<dyn PlatformChecker>] {
+        &self.checkers
     }
 }

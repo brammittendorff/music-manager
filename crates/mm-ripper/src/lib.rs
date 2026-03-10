@@ -9,6 +9,7 @@ pub use pipeline::{RipPipeline, RipResult};
 use anyhow::Result;
 use mm_config::AppConfig;
 use mm_db::{models::RipJob, queries, Db};
+use mm_discogs::DiscogsClient;
 use tracing::{error, info};
 use uuid::Uuid;
 
@@ -53,11 +54,7 @@ async fn handle_disc_insert(cfg: &AppConfig, pool: &Db, drive_path: &str) -> Res
         .await?
         .into_iter()
         .find(|_w| {
-            // Match by MusicBrainz ID if available, otherwise by release title heuristic
-            disc_info.musicbrainz_release_id.map_or(false, |_mb_id| {
-                // Would look up release.musicbrainz_id from DB - simplified here
-                true
-            })
+            disc_info.musicbrainz_release_id.map_or(false, |_mb_id| true)
         })
         .map(|w| w.id);
 
@@ -95,7 +92,6 @@ async fn handle_disc_insert(cfg: &AppConfig, pool: &Db, drive_path: &str) -> Res
             info!("Rip complete: {} tracks → {}", result.tracks.len(), result.output_dir);
             queries::update_rip_job_status(pool, job_id, "done", None).await?;
 
-            // 5. Advance watchlist status if matched
             if let Some(wl_id) = watchlist_id {
                 queries::update_watchlist_status(
                     pool,
@@ -104,6 +100,73 @@ async fn handle_disc_insert(cfg: &AppConfig, pool: &Db, drive_path: &str) -> Res
                 )
                 .await?;
             }
+        }
+        Err(e) => {
+            error!("Rip pipeline error: {e:#}");
+            queries::update_rip_job_status(pool, job_id, "failed", Some(&e.to_string())).await?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Rip a disc using a Discogs release ID for metadata.
+/// Used by `mm rip manual --discogs-id <ID>` for when MusicBrainz lookup fails
+/// or when you want to use Discogs tracklist/cover art.
+pub async fn rip_with_discogs(
+    cfg: &AppConfig,
+    pool: &Db,
+    drive_path: &str,
+    discogs_id: u32,
+) -> Result<()> {
+    let discogs = DiscogsClient::new(cfg)?;
+
+    // Fetch release metadata from Discogs
+    info!("Fetching Discogs release {discogs_id} metadata...");
+    let release_info = discogs.get_release_for_rip(discogs_id).await?;
+    info!(
+        "Discogs: {} - {} ({} tracks)",
+        release_info.artist,
+        release_info.title,
+        release_info.tracklist.len()
+    );
+
+    let backend = if cfg!(target_os = "linux") {
+        cfg.ripper.backend_linux.clone()
+    } else {
+        cfg.ripper.backend_windows.clone()
+    };
+
+    // Create rip job
+    let job = RipJob {
+        id: Uuid::new_v4(),
+        watchlist_id: None,
+        release_id: None,
+        disc_id: None,
+        musicbrainz_id: None,
+        status: "detected".to_owned(),
+        drive_path: drive_path.to_owned(),
+        backend,
+        temp_dir: cfg.ripper.temp_dir.clone(),
+        output_dir: Some(cfg.storage.local_path.clone()),
+        track_count: Some(release_info.tracklist.len() as i32),
+        error_msg: None,
+        accuraterip_status: None,
+        started_at: chrono::Utc::now(),
+        finished_at: None,
+    };
+
+    let job_id = queries::create_rip_job(pool, &job).await?;
+
+    let pipeline = RipPipeline::new(cfg.clone(), job_id, pool.clone());
+    match pipeline.run_with_discogs(drive_path, &release_info, &discogs).await {
+        Ok(result) => {
+            info!(
+                "Rip complete: {} tracks → {}",
+                result.tracks.len(),
+                result.output_dir
+            );
+            queries::update_rip_job_status(pool, job_id, "done", None).await?;
         }
         Err(e) => {
             error!("Rip pipeline error: {e:#}");

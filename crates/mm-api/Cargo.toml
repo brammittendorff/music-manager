@@ -25,6 +25,8 @@ tower-http  = { version = "0.5", features = ["cors", "trace"] }
 dotenvy     = "0.15"
 mm-discogs  = { workspace = true }
 mm-platforms = { workspace = true }
+mm-ripper   = { workspace = true }
 mm-copyright = { workspace = true }
 reqwest     = { workspace = true }
 governor    = { workspace = true }
+futures     = { workspace = true }

@@ -24,7 +24,7 @@ function PopularityDot({ score }: { score: number | null }) {
   const label = score > 0.7 ? 'hot' : score > 0.4 ? 'warm' : 'cool'
   const pct = Math.round(score * 100)
   return (
-    <span title={`Popularity: ${pct}% (${label})`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+    <span title={`Popularity: ${pct}% (${label})\n\nBased on:\n• 70% Discogs: want/have ratio, collection count, rating\n• 30% Enrichment: Last.fm plays + Wikipedia article\n\nHot (>70%) = well-known · Warm (>40%) = niche interest · Cool = obscure`} style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
       <span style={{
         display: 'inline-block',
         width: 28, height: 6, borderRadius: 3,
@@ -215,7 +215,7 @@ function DetailPanel({ releaseId, onClose }: { releaseId: string; onClose: () =>
           )}
           {release.popularity_score != null && (
             <div className="meta-item">
-              <span className="meta-key">Popularity</span>
+              <span className="meta-key" title="70% Discogs (want/have, rating, scarcity) + 30% enrichment (Last.fm plays, Wikipedia)">Popularity</span>
               <span className="meta-val"><PopularityDot score={release.popularity_score} /></span>
             </div>
           )}

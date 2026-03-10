@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use crate::{PlatformChecker, PlatformResult};
+use crate::{AlbumTracksResult, PlatformChecker, PlatformResult, TrackMatch};
 
 #[derive(Debug, Deserialize)]
 struct TokenResponse {
@@ -63,6 +63,21 @@ struct AlbumsWrapper {
 
 #[derive(Debug, Deserialize)]
 struct SpotifyAlbum {
+    id: String,
+    name: String,
+    artists: Vec<SpotifyArtist>,
+    external_urls: ExternalUrls,
+}
+
+// ─── Album tracks types ──────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+struct SpotifyAlbumTracksResponse {
+    items: Vec<SpotifyAlbumTrack>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SpotifyAlbumTrack {
     name: String,
     artists: Vec<SpotifyArtist>,
     external_urls: ExternalUrls,
@@ -98,10 +113,10 @@ impl SpotifyChecker {
             client_id: cfg.api.spotify_client_id.clone(),
             client_secret: cfg.api.spotify_client_secret.clone(),
             token: Mutex::new(None),
-            // Spotify: ~250 req/30s (unconfirmed). Use 1 req/sec to stay safe.
+            // Spotify: ~250 req/30s (unconfirmed). Use 50 req/min to stay safe.
             // Repeated 429s can escalate to 24h bans, so be conservative.
             limiter: Arc::new(RateLimiter::direct(
-                Quota::per_second(NonZeroU32::new(1).unwrap()),
+                Quota::per_minute(NonZeroU32::new(50).unwrap()),
             )),
             backoff_until: AtomicU64::new(0),
         })
@@ -143,6 +158,18 @@ impl SpotifyChecker {
         });
 
         Ok(token)
+    }
+
+    /// Fetch all tracks of an album by its Spotify ID.
+    async fn get_album_tracks(&self, album_id: &str) -> Result<Vec<SpotifyAlbumTrack>> {
+        let url = format!(
+            "https://api.spotify.com/v1/albums/{}/tracks?limit=50&market=NL",
+            album_id
+        );
+        tracing::info!(url = %url, "Spotify: fetching album tracks");
+        let resp = self.api_get(&url).await?;
+        let data: SpotifyAlbumTracksResponse = resp.json().await?;
+        Ok(data.items)
     }
 
     /// Execute a Spotify API GET request with retry on 429/401.
@@ -248,6 +275,83 @@ impl PlatformChecker for SpotifyChecker {
             }
             None => Ok(Some(PlatformResult::not_found("spotify"))),
         }
+    }
+
+    /// Album search + tracklist fetch: 2 API calls instead of N per-track searches.
+    async fn check_album_tracks(
+        &self,
+        artist: &str,
+        album: &str,
+        track_titles: &[String],
+        threshold: f64,
+    ) -> Result<Option<AlbumTracksResult>> {
+        // 1. Album search (same as check_album)
+        let query = format!("artist:{} album:{}", artist, album);
+        let url = format!(
+            "https://api.spotify.com/v1/search?q={}&type=album&limit=5&market=NL",
+            urlenccode(truncate_query(&query))
+        );
+        tracing::info!(url = %url, "Spotify: album search (with tracks)");
+
+        let resp = self.api_get(&url).await?;
+        let data: AlbumSearchResponse = resp.json().await?;
+
+        // Find best matching album
+        let best_album = data.albums.items.iter().filter_map(|a| {
+            let artist_name = a.artists.first().map(|x| x.name.clone()).unwrap_or_default();
+            let s = mm_matcher::score(artist, album, &artist_name, &a.name);
+            if s >= threshold { Some((s, a)) } else { None }
+        }).max_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap());
+
+        let (_, matched_album) = match best_album {
+            Some(a) => a,
+            None => {
+                return Ok(Some(AlbumTracksResult {
+                    platform: "spotify".to_owned(),
+                    album_found: false,
+                    album_url: None,
+                    track_matches: Vec::new(),
+                }));
+            }
+        };
+
+        let album_url = matched_album.external_urls.spotify.clone();
+        tracing::info!("Spotify: album found, fetching tracklist for {}", matched_album.id);
+
+        // 2. Fetch tracklist (1 extra API call)
+        let album_tracks = self.get_album_tracks(&matched_album.id).await?;
+        tracing::info!("Spotify: album tracks fetched ({} tracks)", album_tracks.len());
+
+        // 3. Fuzzy-match each expected track against the fetched tracklist
+        let track_matches: Vec<TrackMatch> = track_titles.iter().map(|expected| {
+            let best = album_tracks.iter().filter_map(|at| {
+                let at_artist = at.artists.first().map(|a| a.name.clone()).unwrap_or_default();
+                let s = mm_matcher::score(artist, expected, &at_artist, &at.name);
+                if s >= threshold { Some((s, at)) } else { None }
+            }).max_by(|(a, _), (b, _)| a.partial_cmp(b).unwrap());
+
+            match best {
+                Some((s, at)) => TrackMatch {
+                    track_title: expected.clone(),
+                    found: true,
+                    score: Some(s),
+                    platform_url: at.external_urls.spotify.clone(),
+                },
+                None => TrackMatch {
+                    track_title: expected.clone(),
+                    found: false,
+                    score: None,
+                    platform_url: None,
+                },
+            }
+        }).collect();
+
+        Ok(Some(AlbumTracksResult {
+            platform: "spotify".to_owned(),
+            album_found: true,
+            album_url,
+            track_matches,
+        }))
     }
 
     /// Per-track check (fallback if check_album is not used).

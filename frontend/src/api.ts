@@ -133,6 +133,23 @@ export interface RipJob {
   release_title: string | null
 }
 
+export interface DriveInfo {
+  path: string
+  has_media: boolean
+  label: string | null
+}
+
+export interface ReadyRelease {
+  watchlist_id: string
+  release_id: string
+  discogs_id: number
+  title: string
+  artists: string[]
+  year: number | null
+  label: string | null
+  thumb_url: string | null
+}
+
 // ─── Discovery types ──────────────────────────────────────────────────────────
 
 export interface DiscoveryJob {
@@ -201,6 +218,10 @@ export const api = {
   addToWatchlist: (discogs_id: number, notes?: string) =>
     post('/api/watchlist', { discogs_id, notes }),
   ripJobs: () => get<RipJob[]>('/api/rip-jobs'),
+  drives: () => get<DriveInfo[]>('/api/drives'),
+  readyToRip: () => get<ReadyRelease[]>('/api/watchlist/ready-to-rip'),
+  startRip: (drive_path: string, discogs_id: number, watchlist_id?: string) =>
+    post<{ id: string; status: string; message: string }>('/api/rip-jobs', { drive_path, discogs_id, watchlist_id }),
   releaseTracks: (id: string) => get<TrackCheck[]>(`/api/releases/${id}/tracks`),
   discoveryJobs: () => get<DiscoveryJob[]>('/api/discovery/jobs'),
   discoveryCreate: (req: StartJobRequest) => post<{ id: string }>('/api/discovery/jobs', req),

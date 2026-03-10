@@ -16,9 +16,10 @@ impl YoutubeChecker {
     pub fn new() -> Result<Self> {
         Ok(Self {
             yt: YouTube::new().map_err(|e| anyhow::anyhow!("{e}"))?,
-            // 1 req/sec to avoid IP-level 429s from YouTube
+            // 6 req/min (~10s between requests) to avoid Google CAPTCHA/sorry redirects.
+            // YouTube scraping via rusty_ytdl is fragile; be very conservative.
             limiter: Arc::new(RateLimiter::direct(
-                Quota::per_second(NonZeroU32::new(1).unwrap()),
+                Quota::per_minute(NonZeroU32::new(6).unwrap()),
             )),
         })
     }
@@ -136,6 +137,21 @@ fn strip_topic_suffix(name: &str) -> String {
 
 /// Sanitize the query before passing it to rusty_ytdl.
 /// Double quotes in the query cause a JSON parse panic inside the library.
+/// Also truncates to ~200 chars on a word boundary to avoid overly long URLs
+/// that trigger Google's abuse detection (redirects to /sorry/).
 fn sanitize_query(query: &str) -> String {
-    query.replace('"', "")
+    let cleaned = query.replace('"', "");
+    if cleaned.len() <= 200 {
+        return cleaned;
+    }
+    // Truncate on word boundary
+    let mut end = 200;
+    while end > 0 && !cleaned.is_char_boundary(end) {
+        end -= 1;
+    }
+    if let Some(pos) = cleaned[..end].rfind(' ') {
+        cleaned[..pos].to_owned()
+    } else {
+        cleaned[..end].to_owned()
+    }
 }

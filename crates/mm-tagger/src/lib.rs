@@ -15,6 +15,8 @@ pub struct TagInfo {
     pub total_tracks: Option<u32>,
     pub musicbrainz_track_id: Option<String>,
     pub musicbrainz_release_id: Option<String>,
+    /// Cover art JPEG/PNG bytes to embed as APIC frame.
+    pub cover_art: Option<Vec<u8>>,
 }
 
 /// Write ID3v2.4 tags to an MP3 file.
@@ -51,6 +53,25 @@ pub fn tag_mp3(mp3_path: &Path, info: &TagInfo) -> Result<()> {
             description: "MusicBrainz Album Id".to_owned(),
             value: mb_id.clone(),
         });
+    }
+
+    // Embed cover art as front cover (APIC frame)
+    if let Some(ref art_data) = info.cover_art {
+        // Detect MIME type from magic bytes
+        let mime = if art_data.starts_with(&[0xFF, 0xD8]) {
+            "image/jpeg"
+        } else if art_data.starts_with(&[0x89, 0x50, 0x4E, 0x47]) {
+            "image/png"
+        } else {
+            "image/jpeg" // default
+        };
+        tag.add_frame(id3::frame::Picture {
+            mime_type: mime.to_owned(),
+            picture_type: id3::frame::PictureType::CoverFront,
+            description: String::new(),
+            data: art_data.clone(),
+        });
+        debug!("Embedded cover art ({} bytes, {})", art_data.len(), mime);
     }
 
     // Tag written with: music-manager
@@ -97,5 +118,6 @@ pub fn read_tags(mp3_path: &Path) -> Result<Option<TagInfo>> {
         total_tracks,
         musicbrainz_track_id,
         musicbrainz_release_id,
+        cover_art: None, // Not read back from tags
     }))
 }

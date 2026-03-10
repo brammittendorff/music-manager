@@ -23,10 +23,11 @@ impl BandcampChecker {
                 .local_address("0.0.0.0".parse().ok())
                 .user_agent("Mozilla/5.0 (compatible; music-manager/0.1)")
                 .build()?,
-            // Bandcamp: no public API, scraping only. Be very polite: 4 req/min.
-            // Aggressive scraping leads to IP bans via Cloudflare.
+            // Bandcamp: no public API, scraping only. 10 req/min (~6s between requests).
+            // No documented rate limit; Cloudflare blocks are site-configured.
+            // Typical Cloudflare thresholds are ~20 req/10s; 10/min is still very polite.
             limiter: Arc::new(RateLimiter::direct(
-                Quota::per_minute(NonZeroU32::new(4).unwrap()),
+                Quota::per_minute(NonZeroU32::new(10).unwrap()),
             )),
         })
     }
@@ -85,6 +86,10 @@ fn extract_between<'a>(s: &'a str, start: &str, end: &str) -> Option<String> {
 impl PlatformChecker for BandcampChecker {
     fn name(&self) -> &str {
         "bandcamp"
+    }
+
+    fn skip_tracks_if_album_not_found(&self) -> bool {
+        true
     }
 
     /// Album-level check: search Bandcamp for the album by artist + album title.

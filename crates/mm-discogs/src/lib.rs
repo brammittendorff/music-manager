@@ -161,6 +161,108 @@ impl DiscogsClient {
         self.get(&url).await
     }
 
+    /// Fetch tracklist with durations for a release.
+    /// Returns track titles paired with duration in milliseconds (if available).
+    /// Duration format from Discogs is "M:SS" or "MM:SS".
+    pub async fn get_tracklist_with_durations(&self, release_id: u32) -> Vec<(String, Option<u32>)> {
+        let url = format!("{BASE_URL}/releases/{release_id}");
+        match self.get::<serde_json::Value>(&url).await {
+            Ok(json) => {
+                json["tracklist"]
+                    .as_array()
+                    .map(|tracks| {
+                        tracks
+                            .iter()
+                            .filter(|t| t["type_"].as_str().unwrap_or("track") == "track")
+                            .filter_map(|t| {
+                                let title = t["title"].as_str()?.to_owned();
+                                let duration_ms = t["duration"]
+                                    .as_str()
+                                    .and_then(|d| parse_duration_to_ms(d));
+                                Some((title, duration_ms))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default()
+            }
+            Err(_) => vec![],
+        }
+    }
+
+    /// Fetch the primary cover art image URL for a release.
+    /// Returns the full-resolution URI of the first "primary" image,
+    /// falling back to the first image of any type.
+    pub async fn get_cover_art_url(&self, release_id: u32) -> Option<String> {
+        let json: serde_json::Value = self.get(&format!("{BASE_URL}/releases/{release_id}")).await.ok()?;
+        let images = json["images"].as_array()?;
+        // Prefer "primary" type, fall back to first image
+        let primary = images.iter().find(|i| i["type"].as_str() == Some("primary"));
+        let img = primary.or_else(|| images.first())?;
+        img["uri"].as_str().map(|s| s.to_owned())
+    }
+
+    /// Download cover art image bytes. Requires Discogs auth to access image URLs.
+    pub async fn download_cover_art(&self, image_url: &str) -> Result<Vec<u8>> {
+        self.limiter.until_ready().await;
+        let resp = self.http
+            .get(image_url)
+            .header("Authorization", format!("Discogs token={}", self.token))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            bail!("Failed to download cover art: HTTP {}", resp.status());
+        }
+        Ok(resp.bytes().await?.to_vec())
+    }
+
+    /// Fetch release metadata needed for ripping: artist, title, year, tracklist, cover art URL.
+    pub async fn get_release_for_rip(&self, release_id: u32) -> Result<RipReleaseInfo> {
+        let json: serde_json::Value = self.get(&format!("{BASE_URL}/releases/{release_id}")).await?;
+
+        let title = json["title"].as_str().unwrap_or("Unknown Album").to_owned();
+
+        // Artists array
+        let artist = json["artists"]
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|a| a["name"].as_str())
+            .unwrap_or("Unknown Artist")
+            .to_owned();
+
+        let year = json["year"].as_u64().map(|y| y as i32);
+
+        let tracklist: Vec<(String, Option<u32>)> = json["tracklist"]
+            .as_array()
+            .map(|tracks| {
+                tracks.iter()
+                    .filter(|t| t["type_"].as_str().unwrap_or("track") == "track")
+                    .filter_map(|t| {
+                        let title = t["title"].as_str()?.to_owned();
+                        let duration_ms = t["duration"].as_str().and_then(|d| parse_duration_to_ms(d));
+                        Some((title, duration_ms))
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let cover_art_url = json["images"]
+            .as_array()
+            .and_then(|images| {
+                let primary = images.iter().find(|i| i["type"].as_str() == Some("primary"));
+                let img = primary.or_else(|| images.first())?;
+                img["uri"].as_str().map(|s| s.to_owned())
+            });
+
+        Ok(RipReleaseInfo {
+            discogs_id: release_id,
+            title,
+            artist,
+            year,
+            tracklist,
+            cover_art_url,
+        })
+    }
+
     /// Generate the Discogs marketplace buy URL for a release.
     pub fn buy_url(release_id: u32) -> String {
         format!("https://www.discogs.com/sell/list?release_id={release_id}&ships_from=Netherlands")
@@ -172,6 +274,36 @@ impl DiscogsClient {
             "https://www.discogs.com/search/advanced?country_exact={}&format_exact=Vinyl",
             urlenccode(&cfg.search.country)
         )
+    }
+}
+
+/// Release metadata needed for the rip pipeline.
+#[derive(Debug, Clone)]
+pub struct RipReleaseInfo {
+    pub discogs_id: u32,
+    pub title: String,
+    pub artist: String,
+    pub year: Option<i32>,
+    pub tracklist: Vec<(String, Option<u32>)>, // (title, duration_ms)
+    pub cover_art_url: Option<String>,
+}
+
+/// Parse Discogs duration string "M:SS" or "MM:SS" or "H:MM:SS" to milliseconds.
+fn parse_duration_to_ms(s: &str) -> Option<u32> {
+    let parts: Vec<&str> = s.trim().split(':').collect();
+    match parts.len() {
+        2 => {
+            let mins: u32 = parts[0].parse().ok()?;
+            let secs: u32 = parts[1].parse().ok()?;
+            Some((mins * 60 + secs) * 1000)
+        }
+        3 => {
+            let hours: u32 = parts[0].parse().ok()?;
+            let mins: u32 = parts[1].parse().ok()?;
+            let secs: u32 = parts[2].parse().ok()?;
+            Some((hours * 3600 + mins * 60 + secs) * 1000)
+        }
+        _ => None,
     }
 }
 
