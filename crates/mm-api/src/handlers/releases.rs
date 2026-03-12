@@ -90,6 +90,8 @@ pub async fn releases(
         .collect();
 
     let sort_by = q.sort_by.as_deref().unwrap_or("");
+    let search = q.search.as_deref().unwrap_or("").trim();
+    let search_pattern = if search.is_empty() { String::new() } else { format!("%{}%", search.to_lowercase()) };
 
     let order_clause = match sort_by {
         "popularity" | "popularity_desc" => "ORDER BY r.popularity_score DESC NULLS LAST, r.artists[1], r.title",
@@ -148,8 +150,12 @@ pub async fn releases(
                   )
               ) = cardinality($8)
           )
+          AND ($9 = '' OR LOWER(r.title) LIKE $9
+               OR LOWER(r.label) LIKE $9
+               OR EXISTS (SELECT 1 FROM unnest(r.artists) a WHERE LOWER(a) LIKE $9)
+               OR CAST(r.year AS TEXT) LIKE $9)
         {order_clause}
-        LIMIT $9 OFFSET $10
+        LIMIT $10 OFFSET $11
         "#,
     );
 
@@ -162,6 +168,7 @@ pub async fn releases(
     .bind(media)
     .bind(platform_status)
     .bind(&platforms_vec)
+    .bind(&search_pattern)
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)
@@ -276,7 +283,11 @@ pub async fn releases(
                          WHERE pc.release_id = r.id AND pc.platform = p AND pc.found = false
                      )
                  ) = cardinality($8)
-             )"#,
+             )
+             AND ($9 = '' OR LOWER(r.title) LIKE $9
+                  OR LOWER(r.label) LIKE $9
+                  OR EXISTS (SELECT 1 FROM unnest(r.artists) a WHERE LOWER(a) LIKE $9)
+                  OR CAST(r.year AS TEXT) LIKE $9)"#,
     )
     .bind(country_code)
     .bind(year_from)
@@ -286,6 +297,7 @@ pub async fn releases(
     .bind(media)
     .bind(platform_status)
     .bind(&platforms_vec)
+    .bind(&search_pattern)
     .fetch_one(pool)
     .await
     .map_err(db_err)?;

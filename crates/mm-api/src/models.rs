@@ -111,6 +111,7 @@ pub struct ReleasesQuery {
     pub platform_status: Option<String>, // "unchecked" | "missing" | "found"
     pub platforms: Option<String>,       // comma-separated list: "spotify,deezer" (missing on all listed)
     pub sort_by: Option<String>,         // "popularity" | "" (default: artist,title)
+    pub search: Option<String>,          // free-text search across artist, title, label, year
 }
 
 #[derive(Debug, Deserialize)]

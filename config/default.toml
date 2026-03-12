@@ -5,7 +5,7 @@ genres        = ["Pop", "Jazz", "Folk", "Electronic", "Schlager", "Classical", "
 year_from     = 1950
 year_to       = 2005
 page_size     = 100
-max_pages     = 10
+max_pages     = 10000
 format_filter = "Album"
 labels        = [
     "CNR", "Polydor", "Philips", "Havoc", "Negram", "Dureco",

@@ -23,7 +23,7 @@ pub struct DiscogsClient {
 impl DiscogsClient {
     pub fn new(cfg: &AppConfig) -> Result<Self> {
         let http = Client::builder()
-            .user_agent("music-manager/0.1 +https://github.com/music-manager")
+            .user_agent("music-manager/0.1 +https://github.com/brammittendorff/music-manager")
             .timeout(Duration::from_secs(30))
             .local_address("0.0.0.0".parse().ok())
             .build()?;

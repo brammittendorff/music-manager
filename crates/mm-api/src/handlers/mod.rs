@@ -18,7 +18,7 @@ pub use discovery::{
     discovery_clear, discovery_create, discovery_delete_job, discovery_job_status,
     discovery_list, discovery_pause, discovery_resume,
 };
-pub use enrichment::enrich_releases;
+pub use enrichment::{enrich_releases, run_enrichment_loop};
 pub use platform_checker::{
     platform_checker_start, platform_checker_status, platform_checker_stop,
     run_platform_checker_watchdog,

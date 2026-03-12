@@ -204,6 +204,7 @@ export interface ReleasesFilter {
   platform_status?: string   // "unchecked" | "missing" | "found" | ""
   platforms?: string         // comma-separated: "spotify,deezer"
   sort_by?: string           // "artist" | "title" | "year" | "label" | "copyright" | "popularity" | "format" | "price" + optional "_asc"/"_desc"
+  search?: string            // free-text search across artist, title, label, year
 }
 
 export const api = {

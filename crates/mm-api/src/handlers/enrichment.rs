@@ -230,6 +230,63 @@ pub async fn enrich_single_release(
     .ok();
 }
 
+// ─── Background enrichment loop ─────────────────────────────────────────────
+
+pub async fn run_enrichment_loop(state: Arc<AppState>) {
+    info!("Enrichment background loop started");
+
+    let http = match Client::builder()
+        .user_agent("music-manager/0.1 +https://github.com/brammittendorff/music-manager")
+        .timeout(Duration::from_secs(30))
+        .build()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            error!("Enrichment loop: failed to create HTTP client: {e}");
+            return;
+        }
+    };
+
+    let discogs = match DiscogsClient::new(&state.cfg) {
+        Ok(d) => d,
+        Err(e) => {
+            error!("Enrichment loop: failed to create Discogs client: {e}");
+            return;
+        }
+    };
+
+    let lastfm_limiter = RateLimiter::direct(
+        Quota::per_second(NonZeroU32::new(4).unwrap()),
+    );
+    let wiki_limiter = RateLimiter::direct(
+        Quota::per_second(NonZeroU32::new(1).unwrap()),
+    );
+
+    loop {
+        // Find next un-enriched release
+        let release = sqlx::query_as::<_, mm_db::models::Release>(
+            "SELECT * FROM releases WHERE enriched_at IS NULL ORDER BY created_at ASC LIMIT 1"
+        )
+        .fetch_optional(&state.pool)
+        .await;
+
+        match release {
+            Ok(Some(r)) => {
+                enrich_single_release(&state, &r, &discogs, &http, &lastfm_limiter, &wiki_limiter).await;
+                tokio::time::sleep(Duration::from_millis(2500)).await;
+            }
+            Ok(None) => {
+                // All enriched, sleep and check again later
+                tokio::time::sleep(Duration::from_secs(60)).await;
+            }
+            Err(e) => {
+                warn!("Enrichment loop DB error: {e}");
+                tokio::time::sleep(Duration::from_secs(10)).await;
+            }
+        }
+    }
+}
+
 // ─── POST /api/releases/enrich ───────────────────────────────────────────────
 
 pub async fn enrich_releases(State(s): State<Arc<AppState>>) -> impl IntoResponse {
@@ -272,7 +329,7 @@ pub async fn enrich_releases(State(s): State<Arc<AppState>>) -> impl IntoRespons
     let cfg = s.cfg.clone();
     tokio::spawn(async move {
         let http = match Client::builder()
-            .user_agent("music-manager/0.1 +https://github.com/music-manager")
+            .user_agent("music-manager/0.1 +https://github.com/brammittendorff/music-manager")
             .timeout(Duration::from_secs(30))
             .build()
         {

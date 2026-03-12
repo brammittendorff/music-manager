@@ -63,10 +63,11 @@ async fn main() -> Result<()> {
         platform_checker_handle: tokio::sync::Mutex::new(None),
     });
 
-    // Auto-start the platform checker watchdog if Discogs token is configured.
+    // Auto-start background tasks if Discogs token is configured.
     if !state.cfg.api.discogs_token.is_empty() {
         tokio::spawn(handlers::run_platform_checker_watchdog(state.clone()));
         tokio::spawn(handlers::run_watchlist_automation(state.clone()));
+        tokio::spawn(handlers::run_enrichment_loop(state.clone()));
     }
 
     let cors = CorsLayer::new()

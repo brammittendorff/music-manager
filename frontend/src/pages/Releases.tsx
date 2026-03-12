@@ -1,8 +1,8 @@
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api, type Release, type TrackCheck } from '../api'
-import { X, ExternalLink, ShoppingCart, Plus } from 'lucide-react'
+import { X, ExternalLink, ShoppingCart, Plus, Search } from 'lucide-react'
 
 // Persist filters across route changes (survives component remount)
 const savedFilters = {
@@ -11,6 +11,7 @@ const savedFilters = {
   page: 0,
   sortBy: '',
   sortDir: 'asc' as 'asc' | 'desc',
+  search: '',
 }
 
 const PLATFORMS = ['spotify', 'deezer', 'apple_music', 'bandcamp', 'youtube_music']
@@ -318,6 +319,18 @@ export default function Releases() {
   const qc = useQueryClient()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [importing, setImporting] = useState(false)
+  const [searchInput, setSearchInput] = useState(savedFilters.search)
+  const [search, setSearch] = useState(savedFilters.search)
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      savedFilters.search = searchInput
+      savedFilters.page = 0
+      setPageRaw(0)
+      setSearch(searchInput)
+    }, 300)
+    return () => clearTimeout(timer)
+  }, [searchInput])
 
   const setPlatformStatus = (v: string) => {
     savedFilters.platformStatus = v
@@ -366,11 +379,12 @@ export default function Releases() {
   const sortParam = sortBy ? `${sortBy}_${sortDir}` : undefined
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ['releases', platformStatus, platformsParam, page, sortBy, sortDir],
+    queryKey: ['releases', platformStatus, platformsParam, page, sortBy, sortDir, search],
     queryFn: () => api.releases({
       platform_status: platformStatus || undefined,
       platforms: platformsParam,
       sort_by: sortParam,
+      search: search || undefined,
       limit: LIMIT, offset: page * LIMIT,
     }),
     refetchInterval: 15_000,
@@ -386,7 +400,35 @@ export default function Releases() {
       </div>
 
       <div className="filter-bar" style={{ flexWrap: 'wrap', gap: 6 }}>
-        {/* Missing only toggle */}
+        {/* Search */}
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+          <Search size={13} style={{ position: 'absolute', left: 8, color: 'var(--text-muted)', pointerEvents: 'none' }} />
+          <input
+            type="text"
+            placeholder="Search artist, title, label, year…"
+            value={searchInput}
+            onChange={e => setSearchInput(e.target.value)}
+            style={{
+              padding: '5px 10px 5px 28px', borderRadius: 6, fontSize: 12,
+              border: '1px solid var(--border)', background: 'var(--bg-card)',
+              color: 'var(--text-primary)', width: 240, outline: 'none',
+            }}
+          />
+          {searchInput && (
+            <button
+              onClick={() => setSearchInput('')}
+              style={{
+                position: 'absolute', right: 6, background: 'none', border: 'none',
+                color: 'var(--text-muted)', cursor: 'pointer', padding: 0, lineHeight: 1,
+                fontSize: 14,
+              }}
+            >✕</button>
+          )}
+        </div>
+
+        {/* Divider */}
+        <span style={{ width: 1, background: 'var(--border)', alignSelf: 'stretch', margin: '0 2px' }} />
+
         {/* Status filter - mutually exclusive */}
         {([
           { value: 'unchecked', label: 'Unchecked',        title: 'Not yet checked on any platform',          color: '#94a3b8' },

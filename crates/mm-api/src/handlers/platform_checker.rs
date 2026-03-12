@@ -100,7 +100,7 @@ pub async fn run_platform_checker(state: Arc<AppState>) {
 
     // Enrichment resources (reused across all releases)
     let enrich_http = Client::builder()
-        .user_agent("music-manager/0.1 +https://github.com/music-manager")
+        .user_agent("music-manager/0.1 +https://github.com/brammittendorff/music-manager")
         .timeout(Duration::from_secs(30))
         .local_address("0.0.0.0".parse().ok())
         .build()
