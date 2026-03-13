@@ -13,6 +13,10 @@ use tracing::{debug, warn};
 const BASE_URL: &str = "https://api.discogs.com";
 /// Discogs allows 60 authenticated requests/minute.
 const REQUESTS_PER_MINUTE: u32 = 55; // leave headroom
+/// Max retries on 429 before giving up.
+const MAX_429_RETRIES: u32 = 5;
+/// Initial backoff on 429 when no Retry-After header is present.
+const INITIAL_BACKOFF_SECS: u64 = 30;
 
 pub struct DiscogsClient {
     http: Client,
@@ -41,25 +45,41 @@ impl DiscogsClient {
     }
 
     async fn get<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T> {
-        // Block until the rate limiter allows this request
-        self.limiter.until_ready().await;
+        for attempt in 0..=MAX_429_RETRIES {
+            // Block until the rate limiter allows this request
+            self.limiter.until_ready().await;
 
-        let resp = self
-            .http
-            .get(url)
-            .header("Authorization", format!("Discogs token={}", self.token))
-            .send()
-            .await?;
+            let resp = self
+                .http
+                .get(url)
+                .header("Authorization", format!("Discogs token={}", self.token))
+                .send()
+                .await?;
 
-        match resp.status() {
-            StatusCode::OK => Ok(resp.json::<T>().await?),
-            StatusCode::TOO_MANY_REQUESTS => {
-                warn!("Discogs 429 - rate limiter should prevent this");
-                bail!("Discogs rate limit exceeded")
+            match resp.status() {
+                StatusCode::OK => return Ok(resp.json::<T>().await?),
+                StatusCode::TOO_MANY_REQUESTS => {
+                    if attempt == MAX_429_RETRIES {
+                        bail!("Discogs rate limit exceeded after {MAX_429_RETRIES} retries");
+                    }
+                    // Respect Retry-After header, fall back to exponential backoff
+                    let backoff_secs = resp
+                        .headers()
+                        .get("Retry-After")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.parse::<u64>().ok())
+                        .unwrap_or(INITIAL_BACKOFF_SECS * 2u64.pow(attempt));
+                    warn!(
+                        "Discogs 429 on attempt {}/{MAX_429_RETRIES}, backing off {backoff_secs}s",
+                        attempt + 1
+                    );
+                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                }
+                StatusCode::NOT_FOUND => bail!("Discogs: resource not found: {url}"),
+                s => bail!("Discogs HTTP {s} for {url}"),
             }
-            StatusCode::NOT_FOUND => bail!("Discogs: resource not found: {url}"),
-            s => bail!("Discogs HTTP {s} for {url}"),
         }
+        unreachable!()
     }
 
     /// Search Discogs releases with the given filters.
